@@ -127,6 +127,43 @@ function baseOpts(extraX = {}) {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
+      legend: { display: false }, // Wykres ma 1 serię, więc legendę główną ukrywamy
+      tooltip: {
+        enabled: true, // Upewniamy się, że tooltip jest włączony
+        mode: "index",
+        intersect: false,
+        backgroundColor: "#1A2F45",
+        borderColor: "rgba(255,255,255,0.1)",
+        borderWidth: 1,
+        titleColor: "#E8EDF2",
+        bodyColor: "#7A8FA3",
+        padding: 10,
+        cornerRadius: 8,
+        callbacks: {
+          // Tytuł w okienku tooltipa (np. Data / Dzień)
+          title: function (context) {
+            return context[0].label || "";
+          },
+          // Treść w okienku tooltipa (np. Słuchacze: 125)
+          label: function (context) {
+            const value = context.raw || 0;
+            return `Słuchacze: ${value.toLocaleString("pl-PL")}`;
+          },
+        },
+      },
+    },
+    scales: {
+      x: { grid: { color: C.grid, drawBorder: false }, ticks: { color: C.text, font: { size: 11 } }, ...extraX },
+      y: { grid: { color: C.grid, drawBorder: false }, ticks: { color: C.text, font: { size: 11 } }, beginAtZero: true },
+    },
+  };
+}
+
+function baseOpts1(extraX = {}) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
       legend: { display: false },
       tooltip: {
         backgroundColor: "#1A2F45",
@@ -146,6 +183,36 @@ function baseOpts(extraX = {}) {
 }
 
 function makeChart(id, type, labels, data, color, opts = {}) {
+  if (charts[id]) {
+    charts[id].destroy();
+  }
+  const ctx = document.getElementById(id);
+  if (!ctx) return;
+  charts[id] = new Chart(ctx, {
+    type,
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "Słuchacze", // <--- Dodanie nazwy serii danych
+          data,
+          backgroundColor: type === "line" ? color + "22" : color + "cc",
+          borderColor: color,
+          borderWidth: type === "line" ? 2 : 0,
+          fill: type === "line",
+          tension: 0.35,
+          borderRadius: type === "bar" ? 4 : 0,
+          pointRadius: 0,
+          hoverPointRadius: 5, // Rozmiar punktu po najechaniu myszką
+          ...opts,
+        },
+      ],
+    },
+    options: baseOpts(),
+  });
+}
+
+function makeChart1(id, type, labels, data, color, opts = {}) {
   if (charts[id]) {
     charts[id].destroy();
   }
@@ -268,11 +335,125 @@ async function loadNowPlaying() {
     if (d.station && document.getElementById("stId").textContent.trim() == "-") {
       renderStationDashboard(d.station);
     }
+
+    // Song history
+    renderSongHistory(d.song_history || [], d.now_playing || null);
   } catch (e) {
     // Nie nadpisuj globalnego paska — tylko loguj; loadAll zbiera błędy osobno
     if (DEBUG) console.warn("[loadNowPlaying]", e.message);
     throw e; // re-throw żeby run() mógł zebrać błąd
   }
+}
+
+// ──────────────────────────────────────────────
+// SONG HISTORY — renderowana przy każdym nowplaying (co 10 s)
+// ──────────────────────────────────────────────
+
+/**
+ * Formatuje czas trwania utworu z sekund na m:ss
+ */
+function _fmtTrackDuration(sec) {
+  if (!sec || sec <= 0) return "–";
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return m + ":" + String(s).padStart(2, "0");
+}
+
+/**
+ * Renderuje tabelę ostatnio granych z d.song_history[].
+ *
+ * @param {Array}       history    - d.song_history (może być [])
+ * @param {Object|null} nowPlaying - d.now_playing (aktualnie grany, wyróżniony)
+ */
+function renderSongHistory(history, nowPlaying) {
+  const card = document.getElementById("songHistoryCard");
+  const tbody = document.getElementById("songHistoryBody");
+  const sub = document.getElementById("songHistorySub");
+
+  if (!Array.isArray(history) || history.length === 0) {
+    card.style.display = "none";
+    return;
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+
+  // Aktualnie grany utwór — dołącz na początku listy jako wiersz #0
+  const rows = [];
+
+  if (nowPlaying && nowPlaying.song) {
+    rows.push({
+      song: nowPlaying.song,
+      played_at: nowPlaying.played_at || now,
+      duration: nowPlaying.duration || 0,
+      isLive: true,
+    });
+  }
+
+  history.forEach(function (item) {
+    rows.push({
+      song: item.song || {},
+      played_at: item.played_at || 0,
+      duration: item.duration || item.song?.length || 0,
+      isLive: false,
+    });
+  });
+
+  tbody.innerHTML = "";
+
+  rows.forEach(function (row, idx) {
+    const song = row.song;
+    const title = esc(song.title || song.text || "–");
+    const artist = esc(song.artist || "");
+    const album = esc(song.album || "");
+    const dur = _fmtTrackDuration(row.duration);
+
+    // Czas emisji — "teraz" dla aktualnego, godzina dla historycznych
+    var playedAtStr;
+    if (row.isLive) {
+      playedAtStr = '<span style="color:var(--live);font-weight:600">▶ teraz</span>';
+    } else if (row.played_at > 0) {
+      playedAtStr = new Date(row.played_at * 1000).toLocaleTimeString("pl-PL", {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      });
+    } else {
+      playedAtStr = "–";
+    }
+
+    const tr = document.createElement("tr");
+    if (row.isLive) {
+      tr.style.cssText = "background:rgba(var(--live-rgb,220,53,69),.06)";
+    }
+
+    tr.innerHTML =
+      '<td class="num" style="width:28px;color:var(--text-muted);font-size:11px">' +
+      (row.isLive ? "▶" : idx) +
+      "</td>" +
+      "<td><strong>" +
+      title +
+      "</strong></td>" +
+      "<td>" +
+      artist +
+      "</td>" +
+      '<td class="muted" style="font-size:12px">' +
+      album +
+      "</td>" +
+      "<td>" +
+      playedAtStr +
+      "</td>" +
+      '<td class="num muted" style="font-variant-numeric:tabular-nums;font-size:12px">' +
+      dur +
+      "</td>";
+
+    tbody.appendChild(tr);
+  });
+
+  // Podtytuł — liczba wpisów + czas ostatniej aktualizacji
+  sub.textContent =
+    rows.length + " ostatnich utworów · odświeżone " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  card.style.display = "block";
 }
 
 // ──────────────────────────────────────────────
@@ -466,6 +647,7 @@ async function loadMostPlayed() {
   }
 }
 
+// ──────────────────────────────────────────────
 // ──────────────────────────────────────────────
 // LISTENERS — live, odświeżane co 30 s
 // ──────────────────────────────────────────────

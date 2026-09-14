@@ -92,8 +92,10 @@
 
     <!-- TABS -->
     <div class="tabs" id="mainTabs" style="display:none">
-      <button class="tab active" onclick="switchTab('overview')">Przegląd</button>
-      <button class="tab" onclick="switchTab('charts')">Słuchacze</button>
+      <button class="tab active" onclick="switchTab('overview')">Słuchacze</button>
+      <!--
+      <button class="tab" onclick="switchTab('charts')">Przegląd</button>
+      -->
       <button class="tab" onclick="switchTab('tracks')">Utwory</button>
       <button class="tab" onclick="switchTab('listeners')">Połączenia</button>
       <!--
@@ -193,6 +195,33 @@
             <div class="bw-dot"></div>Największy spadek słuchaczy
           </div>
           <div id="worstList"></div>
+        </div>
+      </div>
+
+      <div class="listeners-card" id="songHistoryCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">
+              <span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>
+              Ostatnio grane
+            </div>
+            <div class="listeners-head-sub" id="songHistorySub">/nowplaying → song_history · odświeżane co 10s</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="songHistoryTable">
+            <thead>
+              <tr>
+                <th style="width:28px">#</th>
+                <th>Utwór</th>
+                <th>Wykonawca</th>
+                <th>Album</th>
+                <th>Czas emisji</th>
+                <th>Długość</th>
+              </tr>
+            </thead>
+            <tbody id="songHistoryBody"></tbody>
+          </table>
         </div>
       </div>
 
@@ -311,7 +340,7 @@
       </div>
     </div>
 
-    <footer>AzuraCast Analytics Dashboard v2.0.1 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
+    <footer>AzuraCast Analytics Dashboard v2.1.0 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
   </div>
 
 </body>

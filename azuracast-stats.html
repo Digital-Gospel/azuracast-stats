@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AzuraCast — Live Radio Analytics Dashboard</title>
+  <link href="css/azuracast-stats.min.css" rel="stylesheet">
+  <script src="js/chart.umd.js"></script>
+</head>
+
+<body>
+  <div class="shell">
+
+    <!-- TOPBAR -->
+    <div class="topbar" id="topbar">
+      <div class="brand">
+        <div class="brand-dot" id="stationStatusDot"></div>
+        <div>
+          <div class="brand-name" id="stationNameDisplay">Radio Plus Legnica</div>
+          <div class="brand-sub" id="stationSubDisplay"><span class="cfg-label">URL stacji</span> <a id="stUrl" href="#" target="_blank" style="color:#66b3ff;">-</a></div>
+        </div>
+      </div>
+      <div class="config-bar">
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span id="stPublicBadge" class="badge" style="padding:4px 8px; border-radius:4px; font-size:12px; font-weight:bold;"></span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Frontend / Backend:</span> <span id="stTech" class="cfg-input">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Shortcode:</span> <span id="stShortcode" class="cfg-input" style="font-family:monospace;">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">ID stacji</span> <span id="stId" class="cfg-input" style="font-family:monospace;">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Stream URL</span> <a id="stListenUrl" class="cfg-input" href="#" target="_blank" style="color:#66b3ff;">Otwórz strumień MP3</a>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">HLS Stream</span> <a id="stHlsUrl" class="cfg-input" href="#" target="_blank" style="color:#66b3ff;">Otwórz strumień HLS</a>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Listy odtwarzania:</span>
+          <div class="cfg-group">
+            <a id="stPls" href="#" class="cfg-input" target="_blank" style="font-family:monospace; color:#66b3ff; margin-right:8px;">PLS</a>
+            <a id="stM3u" href="#" class="cfg-input" target="_blank" style="font-family:monospace; color:#66b3ff;">M3U</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATUS BAR -->
+    <div class="status-bar" id="statusBar">
+      <div class="spinner" id="spinner"></div>
+      <span id="statusMsg">Ładowanie danych …</span>
+    </div>
+
+    <!-- LIVE STRIP -->
+    <div class="live-strip" id="liveStrip" style="display:none">
+      <div class="live-badge">
+        <div class="live-dot"></div>Na żywo
+      </div>
+      <div>
+        <div class="live-count" id="liveCount">–</div>
+        <div class="live-unit">słuchaczy teraz</div>
+      </div>
+      <div class="live-meta">
+        <div class="live-meta-item">
+          <div class="live-meta-label">Unikalni</div>
+          <div class="live-meta-value" id="liveUnique">–</div>
+        </div>
+        <div class="live-meta-item">
+          <div class="live-meta-label">Status</div>
+          <div class="live-meta-value" id="liveStatus">–</div>
+        </div>
+        <div class="live-meta-item">
+          <div class="live-meta-label">Bitrate</div>
+          <div class="live-meta-value" id="liveBitrate">–</div>
+        </div>
+      </div>
+      <div class="live-track" id="liveTrackBlock">
+        <div class="live-track-label">Teraz grane</div>
+        <div class="live-track-title" id="liveTitle">–</div>
+        <div class="live-track-artist" id="liveArtist"></div>
+      </div>
+      <div class="live-meta-item">
+        <div class="refresh-info" id="refreshInfo">Odświeża się co 10s</div>
+        <div class="stats-range-label" id="statsRange" style="font-size: 11px; opacity: 0.8; margin-top: 2px;">Zakres: -</div>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs" id="mainTabs" style="display:none">
+      <button class="tab active" onclick="switchTab('overview')">Przegląd</button>
+      <button class="tab" onclick="switchTab('charts')">Słuchacze</button>
+      <button class="tab" onclick="switchTab('tracks')">Utwory</button>
+      <button class="tab" onclick="switchTab('listeners')">Połączenia</button>
+      <!--
+      <button class="tab" onclick="switchTab('requests')">Zamówienia</button>
+      -->
+    </div>
+
+    <!-- TAB: Przegląd -->
+    <div class="tab-panel active" id="tab-overview">
+      <div class="kpi-row" id="kpiRow" style="display:none">
+        <div class="kpi-card">
+          <div class="kpi-label">Razem odsłon (wszystkie dni)</div>
+          <div class="kpi-value" id="kpiTotal">–</div>
+          <div class="kpi-sub">z wykresów dziennych</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: var(--live)">
+          <div class="kpi-label">Szczyt w ciągu dnia</div>
+          <div class="kpi-value" id="kpiPeak">–</div>
+          <div class="kpi-sub" id="kpiPeakHour">–</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: var(--success)">
+          <div class="kpi-label">Najlepszy dzień tygodnia</div>
+          <div class="kpi-value" id="kpiBestDay">–</div>
+          <div class="kpi-sub" id="kpiBestDaySub">–</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #A78BFA">
+          <div class="kpi-label">Najlepszy jeden dzień</div>
+          <div class="kpi-value" id="kpiBestDate">–</div>
+          <div class="kpi-sub" id="kpiBestDateSub">–</div>
+        </div>
+      </div>
+
+      <div id="overviewCharts" style="display:none">
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Słuchacze w ciągu dnia (godzinowo)</div>
+            <div class="chart-sub">Średnia liczba słuchaczy o każdej godzinie</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartHourly" role="img" aria-label="Wykres godzinowy słuchaczy"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Słuchacze według dnia tygodnia</div>
+            <div class="chart-sub">Porównanie popularności w poszczególnych dniach</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartDow" role="img" aria-label="Wykres według dnia tygodnia"></canvas></div>
+          </div>
+        </div>
+        <div class="chart-card" style="margin-bottom:16px">
+          <div class="chart-title">Słuchacze każdego dnia</div>
+          <div class="chart-sub">Historia dzienna w wybranym okresie</div>
+          <div class="chart-wrap" style="height:200px"><canvas id="chartDaily" role="img" aria-label="Wykres dzienny słuchaczy"></canvas></div>
+        </div>
+      </div>
+
+      <div class="empty-state" id="overviewEmpty">
+        <div class="empty-state-icon">📻</div>
+        <div class="empty-state-title">Brak danych</div>
+        <div class="empty-state-text">Poczekaj, dane są pobierane automatycznie.</div>
+      </div>
+    </div>
+
+    <!-- TAB: Słuchacze -->
+    <div class="tab-panel" id="tab-charts">
+      <div class="chart-card" style="margin-bottom:16px">
+        <div class="chart-title">Trend dzienny — pełna historia</div>
+        <div class="chart-sub">Każdy rekord z endpointu /reports/overview/charts → daily</div>
+        <div class="chart-wrap" style="height:240px"><canvas id="chartDailyFull" role="img" aria-label="Pełna historia dzienna"></canvas></div>
+      </div>
+      <div class="charts-grid">
+        <div class="chart-card">
+          <div class="chart-title">Profil godzinowy</div>
+          <div class="chart-sub">Godziny 0–23</div>
+          <div class="chart-wrap" style="height:220px"><canvas id="chartHourlyFull" role="img" aria-label="Profil godzinowy"></canvas></div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-title">Dni tygodnia</div>
+          <div class="chart-sub">Pon–Ndz</div>
+          <div class="chart-wrap" style="height:220px"><canvas id="chartDowFull" role="img" aria-label="Dni tygodnia"></canvas></div>
+        </div>
+      </div>
+      <div class="empty-state" id="chartsEmpty" style="display:none">
+        <div class="empty-state-icon">📊</div>
+        <div class="empty-state-title">Brak danych o słuchaczach</div>
+        <div class="empty-state-text">Poczekaj, dane są pobierane automatycznie.</div>
+      </div>
+    </div>
+
+    <!-- TAB: Utwory -->
+    <div class="tab-panel" id="tab-tracks">
+      <div class="bw-grid" id="bwGrid" style="display:none">
+        <div class="bw-card bw-best">
+          <div class="bw-head">
+            <div class="bw-dot"></div>Największy wzrost słuchaczy
+          </div>
+          <div id="bestList"></div>
+        </div>
+        <div class="bw-card bw-worst">
+          <div class="bw-head">
+            <div class="bw-dot"></div>Największy spadek słuchaczy
+          </div>
+          <div id="worstList"></div>
+        </div>
+      </div>
+
+      <div class="listeners-card" id="mostPlayedCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">Najczęściej emitowane utwory</div>
+            <div class="listeners-head-sub">/reports/overview/most-played</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="mostPlayedTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Utwór</th>
+                <th>Wykonawca</th>
+                <th>Emisji</th>
+                <th style="min-width:100px">Popularność</th>
+              </tr>
+            </thead>
+            <tbody id="mostPlayedBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="empty-state" id="tracksEmpty" style="display:none">
+        <div class="empty-state-icon">🎵</div>
+        <div class="empty-state-title">Brak danych o utworach</div>
+        <div class="empty-state-text">Poczekaj, dane są pobierane automatycznie.</div>
+      </div>
+    </div>
+
+    <!-- TAB: Połączenia -->
+    <div class="tab-panel" id="tab-listeners">
+      <div id="listenersGeo" style="display:none">
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Słuchacze według kraju</div>
+            <div class="chart-sub">Podział geograficzny</div>
+            <div id="geoList"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Klienty odtwarzające</div>
+            <div class="chart-sub">User-agent / odtwarzacz</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartUA" role="img" aria-label="Klienci odtwarzające"></canvas></div>
+          </div>
+        </div>
+      </div>
+      <div class="listeners-card" id="listenersTableCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">
+              <span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>
+              Połączenia słuchaczy — na żywo
+            </div>
+            <div class="listeners-head-sub" id="listenersCount"></div>
+          </div>
+          <div style="text-align:right; font-size:11px; color:var(--text-muted); line-height:1.6">
+            <div id="listenersLastUpdate">–</div>
+            <div id="listenersNextRefresh" style="color:var(--amber)">Odświeżenie za 30s</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="listenersTable">
+            <thead>
+              <tr>
+                <th style="width:28px">#</th>
+                <th>IP</th>
+                <th>Lokalizacja</th>
+                <th>Odtwarzacz</th>
+                <th>Strumień</th>
+                <th>Czas połączenia</th>
+                <th>Od</th>
+              </tr>
+            </thead>
+            <tbody id="listenersBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="empty-state" id="listenersEmpty" style="display:none">
+        <div class="empty-state-icon">👥</div>
+        <div class="empty-state-title">Brak danych o połączeniach</div>
+        <div class="empty-state-text">Poczekaj, dane są pobierane automatycznie.</div>
+      </div>
+    </div>
+
+    <!-- TAB: REQUESTS -->
+    <div class="tab-panel" id="tab-requests">
+      <div class="listeners-card" id="requestsCard" style="display:none">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">Historia zamówień</div>
+            <div class="listeners-head-sub">/reports/requests</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="requestsTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Utwór</th>
+                <th>Wykonawca</th>
+                <th>Zamówień</th>
+                <th style="min-width:100px">Popularność</th>
+              </tr>
+            </thead>
+            <tbody id="requestsBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="empty-state" id="requestsEmpty">
+        <div class="empty-state-icon">📋</div>
+        <div class="empty-state-title">Brak danych o zamówieniach</div>
+        <div class="empty-state-text">Dane są pobierane automatycznie. Dane są pobierane przez bezpieczny proxy API.</div>
+      </div>
+    </div>
+
+    <footer>AzuraCast Analytics Dashboard v2.0.1 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
+  </div>
+
+</body>
+
+<script src="js/azuracast-stats.min.js"></script>
+
+</html>

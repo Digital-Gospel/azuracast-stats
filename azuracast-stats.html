@@ -92,15 +92,9 @@
 
     <!-- TABS -->
     <div class="tabs" id="mainTabs" style="display:none">
-      <button class="tab active" onclick="switchTab('overview')">Słuchacze</button>
-      <!--
-      <button class="tab" onclick="switchTab('charts')">Przegląd</button>
-      -->
-      <button class="tab" onclick="switchTab('tracks')">Utwory</button>
-      <button class="tab" onclick="switchTab('listeners')">Połączenia</button>
-      <!--
-      <button class="tab" onclick="switchTab('requests')">Zamówienia</button>
-      -->
+      <button class="tab active" onclick="switchTab('overview', this)">Słuchacze</button>
+      <button class="tab" onclick="switchTab('tracks', this)">Utwory</button>
+      <button class="tab" onclick="switchTab('listeners', this)">Połączenia</button>
     </div>
 
     <!-- TAB: Przegląd -->
@@ -111,6 +105,13 @@
           <div class="kpi-value" id="kpiTotal">–</div>
           <div class="kpi-sub">z wykresów dziennych</div>
         </div>
+        <!--
+        <div class="kpi-card" style="--accent-color: #38BDF8">
+          <div class="kpi-label">Czas słuchania (TLH)</div>
+          <div class="kpi-value" id="kpiTlh">–</div>
+          <div class="kpi-sub">Suma godzin połączeń</div>
+        </div>
+        -->
         <div class="kpi-card" style="--accent-color: var(--live)">
           <div class="kpi-label">Szczyt w ciągu dnia</div>
           <div class="kpi-value" id="kpiPeak">–</div>
@@ -229,7 +230,7 @@
         <div class="listeners-head">
           <div>
             <div class="listeners-head-title">Najczęściej emitowane utwory</div>
-            <div class="listeners-head-sub">/reports/overview/most-played</div>
+            <div class="listeners-head-sub">Lista piosenek wraz z całkowitą liczbą emisji w wybranym okresie.</div>
           </div>
         </div>
         <div class="listeners-body">
@@ -336,15 +337,14 @@
       <div class="empty-state" id="requestsEmpty">
         <div class="empty-state-icon">📋</div>
         <div class="empty-state-title">Brak danych o zamówieniach</div>
-        <div class="empty-state-text">Dane są pobierane automatycznie. Dane są pobierane przez bezpieczny proxy API.</div>
+        <div class="empty-state-text">Dane są pobierane automatycznie przez bezpieczny proxy API.</div>
       </div>
     </div>
 
-    <footer>AzuraCast Analytics Dashboard v2.1.0 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
+    <footer>AzuraCast Analytics Dashboard v2.2.0 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
   </div>
 
+  <script src="js/azuracast-stats.min.js"></script>
 </body>
-
-<script src="js/azuracast-stats.min.js"></script>
 
 </html>

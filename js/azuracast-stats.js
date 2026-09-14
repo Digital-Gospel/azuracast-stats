@@ -12,24 +12,28 @@ function renderStationDashboard(data) {
   document.getElementById("stShortcode").textContent = data.shortcode || "–";
 
   const badge = document.getElementById("stPublicBadge");
-  if (data.is_public) {
-    badge.textContent = "PUBLICZNA";
-    badge.style.background = "#28a745";
-    badge.style.color = "#fff";
-  } else {
-    badge.textContent = "PRYWATNA";
-    badge.style.background = "#dc3545";
-    badge.style.color = "#fff";
+  if (badge) {
+    if (data.is_public) {
+      badge.textContent = "PUBLICZNA";
+      badge.style.background = "#28a745";
+      badge.style.color = "#fff";
+    } else {
+      badge.textContent = "PRYWATNA";
+      badge.style.background = "#dc3545";
+      badge.style.color = "#fff";
+    }
   }
 
-  // 4. Dane techniczne (Frontend / Backend)
+  // Dane techniczne (Frontend / Backend)
   const frontend = data.frontend || "nieznany";
   const backend = data.backend || "nieznany";
-  document.getElementById("stTech").textContent = `${frontend} / ${backend}`;
+  const stTechEl = document.getElementById("stTech");
+  if (stTechEl) stTechEl.textContent = `${frontend} / ${backend}`;
 
-  document.getElementById("stId").textContent = `${data.id}`;
+  const stIdEl = document.getElementById("stId");
+  if (stIdEl) stIdEl.textContent = `${data.id}`;
 
-  // 5. Linki i URL-e
+  // Linki i URL-e
   const setLink = (id, url, text) => {
     const el = document.getElementById(id);
     if (el && url) {
@@ -90,24 +94,35 @@ async function apiPost() {
 function showStatus(msg, isErr = false) {
   const bar = document.getElementById("statusBar");
   const sp = document.getElementById("spinner");
-  bar.className = "status-bar visible" + (isErr ? " error" : "");
-  document.getElementById("statusMsg").textContent = msg;
-  sp.style.display = isErr ? "none" : "inline-block";
+  if (bar) bar.className = "status-bar visible" + (isErr ? " error" : "");
+  const msgEl = document.getElementById("statusMsg");
+  if (msgEl) msgEl.textContent = msg;
+  if (sp) sp.style.display = isErr ? "none" : "inline-block";
 }
+
 function hideStatus() {
   const bar = document.getElementById("statusBar");
-  bar.className = "status-bar"; // usuwa "visible" i "error"
-  document.getElementById("spinner").style.display = "none";
+  if (bar) bar.className = "status-bar";
+  const sp = document.getElementById("spinner");
+  if (sp) sp.style.display = "none";
 }
 
 // ──────────────────────────────────────────────
-// TABS
+// TABS (Poprawiono bez bezpośredniego powiązania z wolnym 'event')
 // ──────────────────────────────────────────────
-function switchTab(name) {
+function switchTab(name, btnEl) {
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
   document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-  document.getElementById("tab-" + name).classList.add("active");
-  event.target.classList.add("active");
+
+  const targetPanel = document.getElementById("tab-" + name);
+  if (targetPanel) targetPanel.classList.add("active");
+
+  if (btnEl) {
+    btnEl.classList.add("active");
+  } else {
+    const defaultBtn = document.querySelector(`.tab[onclick*="'${name}'"]`);
+    if (defaultBtn) defaultBtn.classList.add("active");
+  }
 }
 
 // ──────────────────────────────────────────────
@@ -127,9 +142,9 @@ function baseOpts(extraX = {}) {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: { display: false }, // Wykres ma 1 serię, więc legendę główną ukrywamy
+      legend: { display: false },
       tooltip: {
-        enabled: true, // Upewniamy się, że tooltip jest włączony
+        enabled: true,
         mode: "index",
         intersect: false,
         backgroundColor: "#1A2F45",
@@ -140,39 +155,14 @@ function baseOpts(extraX = {}) {
         padding: 10,
         cornerRadius: 8,
         callbacks: {
-          // Tytuł w okienku tooltipa (np. Data / Dzień)
           title: function (context) {
-            return context[0].label || "";
+            return context[0]?.label || "";
           },
-          // Treść w okienku tooltipa (np. Słuchacze: 125)
           label: function (context) {
-            const value = context.raw || 0;
-            return `Słuchacze: ${value.toLocaleString("pl-PL")}`;
+            const val = context.raw ?? 0;
+            return `Słuchacze: ${Number(val).toLocaleString("pl-PL")}`;
           },
         },
-      },
-    },
-    scales: {
-      x: { grid: { color: C.grid, drawBorder: false }, ticks: { color: C.text, font: { size: 11 } }, ...extraX },
-      y: { grid: { color: C.grid, drawBorder: false }, ticks: { color: C.text, font: { size: 11 } }, beginAtZero: true },
-    },
-  };
-}
-
-function baseOpts1(extraX = {}) {
-  return {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: "#1A2F45",
-        borderColor: "rgba(255,255,255,0.1)",
-        borderWidth: 1,
-        titleColor: "#E8EDF2",
-        bodyColor: "#7A8FA3",
-        padding: 10,
-        cornerRadius: 8,
       },
     },
     scales: {
@@ -194,7 +184,7 @@ function makeChart(id, type, labels, data, color, opts = {}) {
       labels,
       datasets: [
         {
-          label: "Słuchacze", // <--- Dodanie nazwy serii danych
+          label: "Słuchacze",
           data,
           backgroundColor: type === "line" ? color + "22" : color + "cc",
           borderColor: color,
@@ -203,36 +193,7 @@ function makeChart(id, type, labels, data, color, opts = {}) {
           tension: 0.35,
           borderRadius: type === "bar" ? 4 : 0,
           pointRadius: 0,
-          hoverPointRadius: 5, // Rozmiar punktu po najechaniu myszką
-          ...opts,
-        },
-      ],
-    },
-    options: baseOpts(),
-  });
-}
-
-function makeChart1(id, type, labels, data, color, opts = {}) {
-  if (charts[id]) {
-    charts[id].destroy();
-  }
-  const ctx = document.getElementById(id);
-  if (!ctx) return;
-  charts[id] = new Chart(ctx, {
-    type,
-    data: {
-      labels,
-      datasets: [
-        {
-          data,
-          backgroundColor: type === "line" ? color + "22" : color + "cc",
-          borderColor: color,
-          borderWidth: type === "line" ? 2 : 0,
-          fill: type === "line",
-          tension: 0.35,
-          borderRadius: type === "bar" ? 4 : 0,
-          pointRadius: 0,
-          hoverPointRadius: 4,
+          hoverPointRadius: 5,
           ...opts,
         },
       ],
@@ -245,7 +206,6 @@ function makeChart1(id, type, labels, data, color, opts = {}) {
 // LOAD ALL
 // ──────────────────────────────────────────────
 async function loadAll() {
-  // Reset UI — ukryj panele, pokaż komunikat ładowania
   showStatus("Łączenie z API …");
   document.getElementById("liveStrip").style.display = "none";
   document.getElementById("mainTabs").style.display = "none";
@@ -263,7 +223,6 @@ async function loadAll() {
 
   const errors = [];
 
-  // Pomocnik — uruchamia sekcję, zbiera błędy bez przerywania pozostałych
   const run = async (label, fn) => {
     showStatus(label + "…");
     try {
@@ -274,20 +233,17 @@ async function loadAll() {
     }
   };
 
-  // 1. Dane live + odświeżanie co 10 s
   if (liveTimer) clearInterval(liveTimer);
   await run("Dane na żywo", async () => {
-    await loadNowPlaying(); // pierwsze wywołanie — awaited
+    await loadNowPlaying();
     liveTimer = setInterval(loadNowPlaying, 10000);
   });
 
-  // 2. Dane historyczne i raporty (równolegle — szybsze ładowanie)
   await Promise.allSettled([
     run("Wykresy historyczne", loadCharts),
     run("Rankingi utworów", loadBestWorst),
     run("Historia odtworzeń", loadMostPlayed),
     run("Dane słuchaczy", loadListeners),
-    // run("Zamówienia",       loadRequests),
   ]).then((results) => {
     results.forEach((r) => {
       if (r.status === "rejected") {
@@ -297,14 +253,11 @@ async function loadAll() {
     });
   });
 
-  // Pokaż UI po załadowaniu
   document.getElementById("mainTabs").style.display = "flex";
   document.getElementById("topbar").style.display = "flex";
 
-  // Uruchom live-polling dla zakładki Połączenia (co 30 s)
   startListenersPolling();
 
-  // Finalna informacja w pasku statusu
   if (errors.length) {
     showStatus("Załadowano z błędami (" + errors.length + "): " + errors.join(" · "), true);
   } else {
@@ -328,30 +281,23 @@ async function loadNowPlaying() {
     document.getElementById("liveArtist").textContent = np?.artist || "";
     document.getElementById("refreshInfo").textContent =
       "Odświeżono: " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    // Ujawnij pasek live dopiero gdy dane są gotowe
+
     document.getElementById("liveStrip").style.display = "flex";
 
-    // Uzupełnij topbar danymi stacji (tylko raz — gdy element jeszcze pusty)
-    if (d.station && document.getElementById("stId").textContent.trim() == "-") {
+    if (d.station && document.getElementById("stId").textContent.trim() === "-") {
       renderStationDashboard(d.station);
     }
 
-    // Song history
     renderSongHistory(d.song_history || [], d.now_playing || null);
   } catch (e) {
-    // Nie nadpisuj globalnego paska — tylko loguj; loadAll zbiera błędy osobno
     if (DEBUG) console.warn("[loadNowPlaying]", e.message);
-    throw e; // re-throw żeby run() mógł zebrać błąd
+    throw e;
   }
 }
 
 // ──────────────────────────────────────────────
-// SONG HISTORY — renderowana przy każdym nowplaying (co 10 s)
+// SONG HISTORY
 // ──────────────────────────────────────────────
-
-/**
- * Formatuje czas trwania utworu z sekund na m:ss
- */
 function _fmtTrackDuration(sec) {
   if (!sec || sec <= 0) return "–";
   const m = Math.floor(sec / 60);
@@ -359,16 +305,12 @@ function _fmtTrackDuration(sec) {
   return m + ":" + String(s).padStart(2, "0");
 }
 
-/**
- * Renderuje tabelę ostatnio granych z d.song_history[].
- *
- * @param {Array}       history    - d.song_history (może być [])
- * @param {Object|null} nowPlaying - d.now_playing (aktualnie grany, wyróżniony)
- */
 function renderSongHistory(history, nowPlaying) {
   const card = document.getElementById("songHistoryCard");
   const tbody = document.getElementById("songHistoryBody");
   const sub = document.getElementById("songHistorySub");
+
+  if (!card || !tbody) return;
 
   if (!Array.isArray(history) || history.length === 0) {
     card.style.display = "none";
@@ -376,8 +318,6 @@ function renderSongHistory(history, nowPlaying) {
   }
 
   const now = Math.floor(Date.now() / 1000);
-
-  // Aktualnie grany utwór — dołącz na początku listy jako wiersz #0
   const rows = [];
 
   if (nowPlaying && nowPlaying.song) {
@@ -407,8 +347,7 @@ function renderSongHistory(history, nowPlaying) {
     const album = esc(song.album || "");
     const dur = _fmtTrackDuration(row.duration);
 
-    // Czas emisji — "teraz" dla aktualnego, godzina dla historycznych
-    var playedAtStr;
+    let playedAtStr;
     if (row.isLive) {
       playedAtStr = '<span style="color:var(--live);font-weight:600">▶ teraz</span>';
     } else if (row.played_at > 0) {
@@ -449,21 +388,21 @@ function renderSongHistory(history, nowPlaying) {
     tbody.appendChild(tr);
   });
 
-  // Podtytuł — liczba wpisów + czas ostatniej aktualizacji
-  sub.textContent =
-    rows.length + " ostatnich utworów · odświeżone " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  if (sub) {
+    sub.textContent =
+      rows.length + " ostatnich utworów · odświeżone " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  }
 
   card.style.display = "block";
 }
 
 // ──────────────────────────────────────────────
-// CHARTS
+// CHARTS & KPIS
 // ──────────────────────────────────────────────
 async function loadCharts() {
   try {
     const d = await apiFetch(`/station/${getSid()}/reports/overview/charts`);
 
-    // Extract arrays
     const dailyMetric = d?.daily?.metrics?.[0];
     const dailyAlt = d?.daily?.alt?.[0]?.values || [];
 
@@ -473,19 +412,15 @@ async function loadCharts() {
     const dowLabels = d?.day_of_week?.labels || DAYS_PL;
     const dowMetric = d?.day_of_week?.metrics?.[0];
 
-    // Parse daily
     const dlabels = dailyAlt.map((r) => r.label || "");
     const dvals = dailyMetric?.data ? dailyMetric.data.map((r) => Number(r.y ?? 0)) : [];
 
-    // Parse hourly
     const hlabels = hourlyAll?.labels || [];
     const hvals = hourlyMetric?.data ? hourlyMetric.data.map((v) => Number(v ?? 0)) : [];
 
-    // Parse dow
     const wlabels = dowLabels;
     const wvals = dowMetric?.data ? dowMetric.data.map((v) => Number(v ?? 0)) : [];
 
-    // KPIs
     const total = dvals.reduce((a, b) => a + b, 0);
 
     const maxH = hvals.length ? Math.max(...hvals) : 0;
@@ -497,23 +432,47 @@ async function loadCharts() {
     const maxD = dvals.length ? Math.max(...dvals) : 0;
     const maxDIdx = dvals.indexOf(maxD);
 
-    document.getElementById("kpiTotal").textContent = total.toLocaleString("pl-PL");
-    document.getElementById("kpiPeak").textContent = maxH.toLocaleString("pl-PL");
-    document.getElementById("kpiPeakHour").textContent = maxHIdx >= 0 ? `godzina ${maxHIdx}:00` : "–";
-    document.getElementById("kpiBestDay").textContent = maxWIdx >= 0 ? DAYS_PL[maxWIdx] : "–";
-    document.getElementById("kpiBestDaySub").textContent = maxW.toLocaleString("pl-PL") + " odsłon";
-    document.getElementById("kpiBestDate").textContent = maxDIdx >= 0 ? dlabels[maxDIdx] || maxDIdx : "–";
-    document.getElementById("kpiBestDateSub").textContent = maxD.toLocaleString("pl-PL") + " odsłon";
+    const kpiTotalEl = document.getElementById("kpiTotal");
+    if (kpiTotalEl) kpiTotalEl.textContent = total.toLocaleString("pl-PL");
+
+    /*
+    // Wyliczenie Total Listening Hours (TLH)
+    const totalListeningSeconds = dailyMetric?.data ? dailyMetric.data.reduce((acc, r) => acc + Number(r.y || 0), 0) : 0;
+    const totalListeningHours = Math.round(totalListeningSeconds / 3600);
+    const tlhFormatted = formatTLH(totalListeningSeconds); // Zwróci "4h 42m"
+
+    const kpiTlhEl = document.getElementById("kpiTlh");
+    if (kpiTlhEl) {
+      //kpiTlhEl.textContent = totalListeningHours > 0 ? `${totalListeningHours.toLocaleString("pl-PL")} godz.` : "b.d.";
+      kpiTlhEl.textContent = tlhFormatted;
+    }
+    */
+
+    const kpiPeakEl = document.getElementById("kpiPeak");
+    if (kpiPeakEl) kpiPeakEl.textContent = maxH.toLocaleString("pl-PL");
+
+    const kpiPeakHourEl = document.getElementById("kpiPeakHour");
+    if (kpiPeakHourEl) kpiPeakHourEl.textContent = maxHIdx >= 0 ? `godzina ${maxHIdx}:00` : "–";
+
+    const kpiBestDayEl = document.getElementById("kpiBestDay");
+    if (kpiBestDayEl) kpiBestDayEl.textContent = maxWIdx >= 0 ? DAYS_PL[maxWIdx] : "–";
+
+    const kpiBestDaySubEl = document.getElementById("kpiBestDaySub");
+    if (kpiBestDaySubEl) kpiBestDaySubEl.textContent = maxW.toLocaleString("pl-PL") + " odsłon";
+
+    const kpiBestDateEl = document.getElementById("kpiBestDate");
+    if (kpiBestDateEl) kpiBestDateEl.textContent = maxDIdx >= 0 ? dlabels[maxDIdx] || maxDIdx : "–";
+
+    const kpiBestDateSubEl = document.getElementById("kpiBestDateSub");
+    if (kpiBestDateSubEl) kpiBestDateSubEl.textContent = maxD.toLocaleString("pl-PL") + " odsłon";
 
     document.getElementById("kpiRow").style.display = "grid";
     document.getElementById("overviewEmpty").style.display = "none";
 
-    // Overview charts (smaller)
     makeChart("chartHourly", "bar", hlabels.length ? hlabels : HOURS, hvals, C.amber);
     makeChart("chartDow", "bar", wlabels, wvals, C.live);
     makeChart("chartDaily", "line", dlabels, dvals, C.amber);
 
-    // Full-tab charts
     makeChart("chartDailyFull", "line", dlabels, dvals, C.amber);
     makeChart("chartHourlyFull", "bar", hlabels.length ? hlabels : HOURS, hvals, C.amber);
     makeChart("chartDowFull", "bar", wlabels, wvals, C.live);
@@ -541,6 +500,7 @@ async function loadBestWorst() {
     const d = await apiFetch(`/station/${getSid()}/reports/overview/best-and-worst`);
 
     const renderList = (el, items, sign, isMostPlayed = false) => {
+      if (!el) return;
       el.innerHTML = "";
       if (!items || !items.length) {
         el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">Brak danych</div>';
@@ -549,7 +509,6 @@ async function loadBestWorst() {
 
       items.slice(0, 8).forEach((it) => {
         const song = it.song || it;
-        // Wyciąganie wartości delta (dla best/worst) lub liczby odtworzeń (dla mostPlayed)
         const val = isMostPlayed ? (it.num_plays ?? 0) : (it.stat_delta ?? it.listeners_change ?? it.delta ?? 0);
 
         const div = document.createElement("div");
@@ -648,11 +607,8 @@ async function loadMostPlayed() {
 }
 
 // ──────────────────────────────────────────────
+// LISTENERS
 // ──────────────────────────────────────────────
-// LISTENERS — live, odświeżane co 30 s
-// ──────────────────────────────────────────────
-
-// Licznik odliczający do następnego odświeżenia (tick co 1 s)
 let _listenersTick = 30;
 let _listenersTickTimer = null;
 
@@ -671,16 +627,13 @@ function _updateListenersTick() {
   if (el) el.textContent = _listenersTick > 0 ? `Odświeżenie za ${_listenersTick}s` : "Odświeżam…";
 }
 
-// Ikona urządzenia na podstawie flagi device
 function _deviceIcon(device) {
   if (!device) return "🔊";
   if (device.is_mobile) return "📱";
   if (device.is_browser) return "🌐";
-  // odtwarzacze strumieniowe / agregatory
   return "📻";
 }
 
-// Formatowanie czasu trwania połączenia
 function _fmtDuration(sec) {
   if (!sec || sec <= 0) return "–";
   const h = Math.floor(sec / 3600);
@@ -691,7 +644,6 @@ function _fmtDuration(sec) {
   return `${s}s`;
 }
 
-// Skrócona nazwa streamu z mount_name
 function _mountBadge(mountName) {
   if (!mountName) return "";
   if (/HLS/i.test(mountName)) return '<span class="mount-badge mount-hls">HLS</span>';
@@ -705,10 +657,8 @@ async function loadListeners() {
     const d = await apiFetch(`/station/${getSid()}/listeners`);
     const items = Array.isArray(d) ? d : d.listeners || d.results || [];
 
-    // ── TOP 30 według czasu trwania połączenia ──
     const top30 = [...items].sort((a, b) => (b.connected_time || 0) - (a.connected_time || 0)).slice(0, 30);
 
-    // ── Geo aggregation (cała lista) ──
     const geo = {};
     const ua = {};
     items.forEach((it) => {
@@ -719,21 +669,21 @@ async function loadListeners() {
       ua[client] = (ua[client] || 0) + 1;
     });
 
-    // Geo list
     const geoEl = document.getElementById("geoList");
-    const geoSorted = Object.entries(geo)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10);
-    const geoMax = geoSorted[0]?.[1] || 1;
-    geoEl.innerHTML = "";
-    geoSorted.forEach(([country, cnt]) => {
-      const div = document.createElement("div");
-      div.className = "geo-row";
-      div.innerHTML = `<div class="geo-name">${esc(country)}</div><div class="geo-track"><div class="geo-fill" style="width:${Math.round((cnt / geoMax) * 100)}%"></div></div><div class="geo-count">${cnt}</div>`;
-      geoEl.appendChild(div);
-    });
+    if (geoEl) {
+      const geoSorted = Object.entries(geo)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10);
+      const geoMax = geoSorted[0]?.[1] || 1;
+      geoEl.innerHTML = "";
+      geoSorted.forEach(([country, cnt]) => {
+        const div = document.createElement("div");
+        div.className = "geo-row";
+        div.innerHTML = `<div class="geo-name">${esc(country)}</div><div class="geo-track"><div class="geo-fill" style="width:${Math.round((cnt / geoMax) * 100)}%"></div></div><div class="geo-count">${cnt}</div>`;
+        geoEl.appendChild(div);
+      });
+    }
 
-    // UA chart
     const uaSorted = Object.entries(ua)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 7);
@@ -748,64 +698,59 @@ async function loadListeners() {
 
     document.getElementById("listenersGeo").style.display = "block";
 
-    // ── Tabela połączeń live ──
     const tbody = document.getElementById("listenersBody");
-    const now = Math.floor(Date.now() / 1000);
+    if (tbody) {
+      const prevSelected = tbody.querySelector("tr.selected")?.dataset?.hash || null;
+      tbody.innerHTML = "";
 
-    // Zapisz hash aktualnie zaznaczonego wiersza, żeby nie tracić kontekstu
-    const prevSelected = tbody.querySelector("tr.selected")?.dataset?.hash || null;
+      top30.forEach((it, idx) => {
+        const dur = it.connected_time ?? 0;
+        const city = it.location?.city || "";
+        const country = it.location?.country || it.country || "";
+        const region = it.location?.region || "";
 
-    tbody.innerHTML = "";
+        let locationText = "–";
+        if (city && country) locationText = `${city}, ${country}`;
+        else if (country && region) locationText = `${region}, ${country}`;
+        else if (city || country) locationText = city || country;
 
-    top30.forEach((it, idx) => {
-      const dur = it.connected_time ?? 0;
-      const city = it.location?.city || "";
-      const country = it.location?.country || it.country || "";
-      const region = it.location?.region || "";
+        const clientFull = esc(it.device?.client || it.user_agent?.split(" ")[0] || "–");
+        const icon = _deviceIcon(it.device);
+        const mount = _mountBadge(it.mount_name);
+        const connectedAt = it.connected_on ? new Date(it.connected_on * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "–";
 
-      let locationText = "–";
-      if (city && country) locationText = `${city}, ${country}`;
-      else if (country && region) locationText = `${region}, ${country}`;
-      else if (city || country) locationText = city || country;
+        const rowClass = idx === 0 ? "listener-top" : "";
+        const selected = it.hash === prevSelected ? " selected" : "";
 
-      // Klient — usuń zbędny suffix OS jeśli jest taki sam jak is_mobile
-      const clientFull = esc(it.device?.client || it.user_agent?.split(" ")[0] || "–");
-      const icon = _deviceIcon(it.device);
-      const mount = _mountBadge(it.mount_name);
-      const connectedAt = it.connected_on ? new Date(it.connected_on * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "–";
+        const tr = document.createElement("tr");
+        tr.className = rowClass + selected;
+        tr.dataset.hash = it.hash || "";
 
-      // Wiersz #1 (najdłużej połączony) dostaje wyróżnienie
-      const rowClass = idx === 0 ? "listener-top" : "";
-      const selected = it.hash === prevSelected ? " selected" : "";
+        tr.innerHTML = `
+          <td class="num" style="width:28px;color:var(--text-muted);font-size:11px">${idx + 1}</td>
+          <td class="muted" style="font-family:monospace;font-size:11px">${esc(it.ip || "–")}</td>
+          <td>${esc(locationText)}</td>
+          <td title="${clientFull}" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            <span style="margin-right:4px">${icon}</span>${clientFull}
+          </td>
+          <td>${mount}</td>
+          <td class="num" style="font-variant-numeric:tabular-nums">${_fmtDuration(dur)}</td>
+          <td class="muted">${connectedAt}</td>`;
+        tbody.appendChild(tr);
+      });
+    }
 
-      const tr = document.createElement("tr");
-      tr.className = rowClass + selected;
-      tr.dataset.hash = it.hash || "";
+    const listenersCountEl = document.getElementById("listenersCount");
+    if (listenersCountEl) {
+      listenersCountEl.textContent = `${items.length} aktywnych · top ${top30.length} wg czasu`;
+    }
 
-      tr.innerHTML = `
-        <td class="num" style="width:28px;color:var(--text-muted);font-size:11px">${idx + 1}</td>
-        <td class="muted" style="font-family:monospace;font-size:11px">${esc(it.ip || "–")}</td>
-        <td>${esc(locationText)}</td>
-        <td title="${clientFull}" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-          <span style="margin-right:4px">${icon}</span>${clientFull}
-        </td>
-        <td>${mount}</td>
-        <td class="num" style="font-variant-numeric:tabular-nums">${_fmtDuration(dur)}</td>
-        <td class="muted">${connectedAt}</td>`;
-      tbody.appendChild(tr);
-    });
-
-    // Nagłówek karty
-    document.getElementById("listenersCount").textContent = `${items.length} aktywnych · top ${top30.length} wg czasu`;
-
-    // Czas ostatniego odświeżenia
     const tsEl = document.getElementById("listenersLastUpdate");
     if (tsEl) tsEl.textContent = "Odświeżono: " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
     document.getElementById("listenersTableCard").style.display = "block";
     document.getElementById("listenersEmpty").style.display = "none";
 
-    // Resetuj licznik odliczania
     _startListenersTick();
   } catch (e) {
     if (DEBUG) console.warn("[loadListeners]", e.message);
@@ -813,7 +758,6 @@ async function loadListeners() {
   }
 }
 
-// Uruchom / zrestartuj timer co 30 s dla zakładki Połączenia
 function startListenersPolling() {
   if (listenersTimer) clearInterval(listenersTimer);
   listenersTimer = setInterval(() => {
@@ -835,6 +779,7 @@ async function loadRequests() {
 
     const max = Math.max(...items.map((it) => Number(it.count || it.request_count || 1)));
     const tbody = document.getElementById("requestsBody");
+    if (!tbody) return;
     tbody.innerHTML = "";
     items.slice(0, 30).forEach((it, i) => {
       const song = it.song || it.track || it;
@@ -869,27 +814,15 @@ function esc(s) {
     .replace(/"/g, "&quot;");
 }
 
+function formatTLH(seconds) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  return `${hours}h ${minutes}m`;
+}
+
 // ──────────────────────────────────────────────
 // MAIN
 // ──────────────────────────────────────────────
 window.addEventListener("load", () => {
-  //const today = new Date();
-  //const ago30 = new Date(today - 30 * 24 * 3600 * 1000);
-  //const fmt = (d) => d.toISOString().slice(0, 10);
-
   loadAll();
-
-  // Załaduj od razu dane live (endpoint publiczny, GET)
-  /*
-    loadNowPlaying()
-    .then(() => {
-      document.getElementById("liveStrip").style.display = "flex";
-    })
-    .then(() => {
-      loadAll();
-      apiFetch(`/station/${getSid()}`).then((d) => {
-        renderStationDashboard(d);
-      });
-    });
-  */
 });

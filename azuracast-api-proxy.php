@@ -28,14 +28,25 @@ declare(strict_types=1);
  *   ALLOWED_ORIGIN           – dozwolony Origin CORS (opcjonalny)
  */
 
+const SECRET_FILE = './azuracast-api-proxy.env';
+
 // ─────────────────────────────────────────────────────────────
 // 0. BOOTSTRAP
 // ─────────────────────────────────────────────────────────────
 
 set_time_limit(20);                // PHP-level safety net
 ignore_user_abort(false);          // nie kontynuuj gdy klient się rozłączy
+error_reporting(0);                // wyłącz wyświetlanie błędów w produkcji
 
-const SECRET_FILE = './azuracast-api-proxy.env';
+// Inicjalizacja sesji dla weryfikacji Turnstile (jeśli wymagane)
+session_start();
+if (empty($_SESSION['cf_verified'])) {
+    http_response_code(403);
+    header('Content-Type: application/json; charset=utf-8');
+    echo json_encode(['error' => 'Brak autoryzacji Cloudflare Turnstile.', 'status' => 403]);
+    proxyLog('WARN', 'Brak autoryzacji Cloudflare Turnstile.', ['status' => '403']);
+    exit;
+}
 
 // ─────────────────────────────────────────────────────────────
 // 1. KONFIGURACJA — wczytana wyłącznie z .env / zmiennych środowiskowych

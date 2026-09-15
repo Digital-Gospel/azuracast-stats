@@ -10,6 +10,41 @@
 </head>
 
 <body>
+  <!-- Turnstile Verification Overlay -->
+  <div id="turnstile-overlay" style="position:fixed; top:0; left:0; width:100%; height:100%; background:#0f172a; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font-family:sans-serif;">
+    <div style="margin-bottom:15px; font-size:18px;">Automatyczna weryfikacja bezpieczeństwa...</div>
+    <!-- Widget Turnstile (domyślnie niewidoczny / managed) -->
+    <div id="cf-turnstile"></div>
+  </div>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback" async defer></script>
+  <script>
+    function onloadTurnstileCallback() {
+      turnstile.render('#cf-turnstile', {
+        sitekey: '0x4AAAAAAE1Mp8R2h7wPVTuD',
+        callback: function (token) {
+          // Po automatycznym wygenerowaniu tokena wysyłamy go na backend
+          fetch('turnstile-verify.php', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: token })
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.success) {
+                // Ukryj overlay i odsłoń dashboard
+                const overlay = document.getElementById('turnstile-overlay');
+                if (overlay) overlay.style.display = 'none';
+              } else {
+                alert('Weryfikacja nie powiodła się: ' + (data.error || 'Spróbuj odświeżyć stronę.'));
+              }
+            })
+            .catch(() => alert('Błąd połączenia z serwerem weryfikacji.'));
+        },
+      });
+    }
+  </script>
+
   <div class="shell">
 
     <!-- TOPBAR -->
@@ -341,7 +376,7 @@
       </div>
     </div>
 
-    <footer>AzuraCast Analytics Dashboard v2.2.0 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
+    <footer>AzuraCast Analytics Dashboard v2.2.1 · Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · &copy; 2026 All Rights Reserved</footer>
   </div>
 
   <script src="js/azuracast-stats.min.js"></script>

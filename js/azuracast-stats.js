@@ -1,46 +1,51 @@
-const DEBUG = true;
-
-// API credentials are kept server-side in api.php.
-// The browser only talks to our same-origin proxy.
 const PROXY_URL = "azuracast-api-proxy.php";
-const STATION_ID = "1";
+const APP_CONFIG = window.APP_CONFIG || {};
+const DEBUG = Boolean(APP_CONFIG.DEBUG);
+const STATION_ID = Number(APP_CONFIG.STATION_ID || 1);
+const LOCALE = APP_CONFIG.LOCALE || "en-US";
+
+// API credentials are kept server-side.
+// The browser only talks to our same-origin proxy.
 
 function renderStationDashboard(data) {
   if (!data) return;
 
-  document.getElementById("stationNameDisplay").textContent = data.name || "Stacja radiowa";
+  document.getElementById("stationNameDisplay").textContent = data.name || "Radio Station";
   document.getElementById("stShortcode").textContent = data.shortcode || "–";
 
   const badge = document.getElementById("stPublicBadge");
   if (badge) {
     if (data.is_public) {
-      badge.textContent = "PUBLICZNA";
+      badge.textContent = "PUBLIC";
       badge.style.background = "#28a745";
       badge.style.color = "#fff";
     } else {
-      badge.textContent = "PRYWATNA";
+      badge.textContent = "PRIVATE";
       badge.style.background = "#dc3545";
       badge.style.color = "#fff";
     }
   }
 
-  // Dane techniczne (Frontend / Backend)
-  const frontend = data.frontend || "nieznany";
-  const backend = data.backend || "nieznany";
+  // Technical details (Frontend / Backend)
+  const frontend = data.frontend || "unknown";
+  const backend = data.backend || "unknown";
   const stTechEl = document.getElementById("stTech");
   if (stTechEl) stTechEl.textContent = `${frontend} / ${backend}`;
 
   const stIdEl = document.getElementById("stId");
   if (stIdEl) stIdEl.textContent = `${data.id}`;
 
-  // Linki i URL-e
+  // Links and URLs
   const setLink = (id, url, text) => {
     const el = document.getElementById(id);
-    if (el && url) {
+    const safe = typeof url === "string" && /^https?:\/\//i.test(url);
+
+    if (el && safe) {
       el.href = url;
       if (text) el.textContent = text;
       el.style.display = "inline";
     } else if (el) {
+      el.removeAttribute("href");
       el.style.display = "none";
     }
   };
@@ -58,8 +63,8 @@ function renderStationDashboard(data) {
 let liveTimer = null;
 let listenersTimer = null;
 const charts = {};
-const DAYS_PL = ["Poniedziałek", "Wtorek", "Środa", "Czwartek", "Piątek", "Sobota", "Niedziela"];
-const HOURS = Array.from({ length: 24 }, (_, i) => i + "h");
+const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+const HOURS = Array.from({ length: 24 }, (_, i) => i + ":00");
 
 function getSid() {
   return STATION_ID;
@@ -85,7 +90,7 @@ async function apiFetch(path) {
 
 // POST is intentionally disabled: this dashboard only needs read-only API access.
 async function apiPost() {
-  throw new Error("Operacje POST są wyłączone w tym dashboardzie.");
+  throw new Error("POST operations are disabled in this dashboard.");
 }
 
 // ──────────────────────────────────────────────
@@ -108,7 +113,7 @@ function hideStatus() {
 }
 
 // ──────────────────────────────────────────────
-// TABS (Poprawiono bez bezpośredniego powiązania z wolnym 'event')
+// TABS (Uses an explicit button reference instead of the global event object)
 // ──────────────────────────────────────────────
 function switchTab(name, btnEl) {
   document.querySelectorAll(".tab-panel").forEach((p) => p.classList.remove("active"));
@@ -160,7 +165,7 @@ function baseOpts(extraX = {}) {
           },
           label: function (context) {
             const val = context.raw ?? 0;
-            return `Słuchacze: ${Number(val).toLocaleString("pl-PL")}`;
+            return `Listeners: ${Number(val).toLocaleString(LOCALE)}`;
           },
         },
       },
@@ -184,7 +189,7 @@ function makeChart(id, type, labels, data, color, opts = {}) {
       labels,
       datasets: [
         {
-          label: "Słuchacze",
+          label: "Listeners",
           data,
           backgroundColor: type === "line" ? color + "22" : color + "cc",
           borderColor: color,
@@ -206,7 +211,7 @@ function makeChart(id, type, labels, data, color, opts = {}) {
 // LOAD ALL
 // ──────────────────────────────────────────────
 async function loadAll() {
-  showStatus("Łączenie z API …");
+  showStatus("Connecting to API …");
   document.getElementById("liveStrip").style.display = "none";
   document.getElementById("mainTabs").style.display = "none";
   document.getElementById("topbar").style.display = "none";
@@ -219,7 +224,6 @@ async function loadAll() {
   document.getElementById("listenersGeo").style.display = "none";
   document.getElementById("listenersTableCard").style.display = "none";
   document.getElementById("listenersEmpty").style.display = "block";
-  document.getElementById("requestsCard").style.display = "none";
 
   const errors = [];
 
@@ -234,20 +238,20 @@ async function loadAll() {
   };
 
   if (liveTimer) clearInterval(liveTimer);
-  await run("Dane na żywo", async () => {
+  await run("Live data", async () => {
     await loadNowPlaying();
     liveTimer = setInterval(loadNowPlaying, 10000);
   });
 
   await Promise.allSettled([
-    run("Wykresy historyczne", loadCharts),
-    run("Rankingi utworów", loadBestWorst),
-    run("Historia odtworzeń", loadMostPlayed),
-    run("Dane słuchaczy", loadListeners),
+    run("Historical charts", loadCharts),
+    run("Track rankings", loadBestWorst),
+    run("Playback history", loadMostPlayed),
+    run("Listener data", loadListeners),
   ]).then((results) => {
     results.forEach((r) => {
       if (r.status === "rejected") {
-        errors.push(r.reason?.message || "Nieznany błąd");
+        errors.push(r.reason?.message || "Unknown error");
         if (DEBUG) console.warn("[loadAll] Promise rejected:", r.reason);
       }
     });
@@ -259,7 +263,7 @@ async function loadAll() {
   startListenersPolling();
 
   if (errors.length) {
-    showStatus("Załadowano z błędami (" + errors.length + "): " + errors.join(" · "), true);
+    showStatus("Loaded with errors (" + errors.length + "): " + errors.join(" · "), true);
   } else {
     hideStatus();
   }
@@ -280,7 +284,7 @@ async function loadNowPlaying() {
     document.getElementById("liveTitle").textContent = np?.title || np?.text || "–";
     document.getElementById("liveArtist").textContent = np?.artist || "";
     document.getElementById("refreshInfo").textContent =
-      "Odświeżono: " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      "Refreshed: " + new Date().toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
     document.getElementById("liveStrip").style.display = "flex";
 
@@ -349,9 +353,9 @@ function renderSongHistory(history, nowPlaying) {
 
     let playedAtStr;
     if (row.isLive) {
-      playedAtStr = '<span style="color:var(--live);font-weight:600">▶ teraz</span>';
+      playedAtStr = '<span style="color:var(--live);font-weight:600">▶ now</span>';
     } else if (row.played_at > 0) {
-      playedAtStr = new Date(row.played_at * 1000).toLocaleTimeString("pl-PL", {
+      playedAtStr = new Date(row.played_at * 1000).toLocaleTimeString(LOCALE, {
         hour: "2-digit",
         minute: "2-digit",
         second: "2-digit",
@@ -390,7 +394,7 @@ function renderSongHistory(history, nowPlaying) {
 
   if (sub) {
     sub.textContent =
-      rows.length + " ostatnich utworów · odświeżone " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+      rows.length + " recent tracks · refreshed " + new Date().toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   }
 
   card.style.display = "block";
@@ -409,7 +413,7 @@ async function loadCharts() {
     const hourlyAll = d?.hourly?.all;
     const hourlyMetric = hourlyAll?.metrics?.[0];
 
-    const dowLabels = d?.day_of_week?.labels || DAYS_PL;
+    const dowLabels = d?.day_of_week?.labels || DAYS;
     const dowMetric = d?.day_of_week?.metrics?.[0];
 
     const dlabels = dailyAlt.map((r) => r.label || "");
@@ -433,38 +437,26 @@ async function loadCharts() {
     const maxDIdx = dvals.indexOf(maxD);
 
     const kpiTotalEl = document.getElementById("kpiTotal");
-    if (kpiTotalEl) kpiTotalEl.textContent = total.toLocaleString("pl-PL");
+    if (kpiTotalEl) kpiTotalEl.textContent = total.toLocaleString(LOCALE);
 
-    /*
-    // Wyliczenie Total Listening Hours (TLH)
-    const totalListeningSeconds = dailyMetric?.data ? dailyMetric.data.reduce((acc, r) => acc + Number(r.y || 0), 0) : 0;
-    const totalListeningHours = Math.round(totalListeningSeconds / 3600);
-    const tlhFormatted = formatTLH(totalListeningSeconds); // Zwróci "4h 42m"
-
-    const kpiTlhEl = document.getElementById("kpiTlh");
-    if (kpiTlhEl) {
-      //kpiTlhEl.textContent = totalListeningHours > 0 ? `${totalListeningHours.toLocaleString("pl-PL")} godz.` : "b.d.";
-      kpiTlhEl.textContent = tlhFormatted;
-    }
-    */
 
     const kpiPeakEl = document.getElementById("kpiPeak");
-    if (kpiPeakEl) kpiPeakEl.textContent = maxH.toLocaleString("pl-PL");
+    if (kpiPeakEl) kpiPeakEl.textContent = maxH.toLocaleString(LOCALE);
 
     const kpiPeakHourEl = document.getElementById("kpiPeakHour");
-    if (kpiPeakHourEl) kpiPeakHourEl.textContent = maxHIdx >= 0 ? `godzina ${maxHIdx}:00` : "–";
+    if (kpiPeakHourEl) kpiPeakHourEl.textContent = maxHIdx >= 0 ? `hour ${maxHIdx}:00` : "–";
 
     const kpiBestDayEl = document.getElementById("kpiBestDay");
-    if (kpiBestDayEl) kpiBestDayEl.textContent = maxWIdx >= 0 ? DAYS_PL[maxWIdx] : "–";
+    if (kpiBestDayEl) kpiBestDayEl.textContent = maxWIdx >= 0 ? DAYS[maxWIdx] : "–";
 
     const kpiBestDaySubEl = document.getElementById("kpiBestDaySub");
-    if (kpiBestDaySubEl) kpiBestDaySubEl.textContent = maxW.toLocaleString("pl-PL") + " odsłon";
+    if (kpiBestDaySubEl) kpiBestDaySubEl.textContent = maxW.toLocaleString(LOCALE) + " views";
 
     const kpiBestDateEl = document.getElementById("kpiBestDate");
     if (kpiBestDateEl) kpiBestDateEl.textContent = maxDIdx >= 0 ? dlabels[maxDIdx] || maxDIdx : "–";
 
     const kpiBestDateSubEl = document.getElementById("kpiBestDateSub");
-    if (kpiBestDateSubEl) kpiBestDateSubEl.textContent = maxD.toLocaleString("pl-PL") + " odsłon";
+    if (kpiBestDateSubEl) kpiBestDateSubEl.textContent = maxD.toLocaleString(LOCALE) + " views";
 
     document.getElementById("kpiRow").style.display = "grid";
     document.getElementById("overviewEmpty").style.display = "none";
@@ -473,16 +465,13 @@ async function loadCharts() {
     makeChart("chartDow", "bar", wlabels, wvals, C.live);
     makeChart("chartDaily", "line", dlabels, dvals, C.amber);
 
-    makeChart("chartDailyFull", "line", dlabels, dvals, C.amber);
-    makeChart("chartHourlyFull", "bar", hlabels.length ? hlabels : HOURS, hvals, C.amber);
-    makeChart("chartDowFull", "bar", wlabels, wvals, C.live);
 
     const rangeElement = document.getElementById("statsRange");
     const dailyValues = d?.daily?.alt?.[0]?.values;
     if (rangeElement && dailyValues && dailyValues.length > 0) {
       const startDate = dailyValues[0].label;
       const endDate = dailyValues[dailyValues.length - 1].label;
-      rangeElement.textContent = `Zakres: ${startDate} – ${endDate}`;
+      rangeElement.textContent = `Range: ${startDate} – ${endDate}`;
     }
     document.getElementById("overviewCharts").style.display = "block";
     document.getElementById("overviewEmpty").style.display = "none";
@@ -503,7 +492,7 @@ async function loadBestWorst() {
       if (!el) return;
       el.innerHTML = "";
       if (!items || !items.length) {
-        el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">Brak danych</div>';
+        el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:8px 0">No data</div>';
         return;
       }
 
@@ -518,7 +507,7 @@ async function loadBestWorst() {
                 <div class="bw-item-title">${esc(song.title || song.text || "–")}</div>
                 <div class="bw-item-artist">${esc(song.artist || "")}</div>
               </div>
-              <div class="bw-item-delta">${sign}${Math.abs(val).toLocaleString("pl-PL")}</div>`;
+              <div class="bw-item-delta">${sign}${Math.abs(val).toLocaleString(LOCALE)}</div>`;
         el.appendChild(div);
       });
     };
@@ -541,18 +530,18 @@ async function loadMostPlayed() {
   try {
     const d = await apiFetch(`/station/${getSid()}/history`);
 
-    // 1. Wyciągnięcie surowej listy odtworzeń z obiektu
+    // 1. Extract the raw playback list from the response
     const history = Array.isArray(d) ? d : d.song_history || d.tracks || d.songs || [];
     if (!history.length) return;
 
-    // 2. Agregacja odtworzeń według utworu
+    // 2. Aggregate plays by track
     const songMap = {};
 
     history.forEach((item) => {
       const song = item.song;
       if (!song) return;
 
-      // Identyfikujemy utwór po ID lub pełnym tekście artist - title
+      // Identify tracks by ID or artist-title text
       const id = song.id || `${song.artist}_${song.title}`;
 
       if (!songMap[id]) {
@@ -566,16 +555,16 @@ async function loadMostPlayed() {
       songMap[id].plays += 1;
     });
 
-    // 3. Konwersja na tablicę i sortowanie od najpopularniejszych
+    // 3. Convert to an array and sort by popularity
     const sortedSongs = Object.values(songMap).sort((a, b) => b.plays - a.plays);
 
-    // 4. Pobranie najwyższej liczby odtworzeń do wyliczenia paska %
+    // 4. Get the highest play count for the percentage bar
     const maxPlays = sortedSongs[0]?.plays || 0;
 
     const tbody = document.getElementById("mostPlayedBody");
     tbody.innerHTML = "";
 
-    // 5. Wyświetlenie TOP 30
+    // 5. Display the top 30
     sortedSongs.slice(0, 30).forEach((song, i) => {
       const plays = song.plays;
       const pct = maxPlays ? Math.round((plays / maxPlays) * 100) : 0;
@@ -586,7 +575,7 @@ async function loadMostPlayed() {
             <td><span class="rank-badge ${badge}">${i + 1}</span></td>
             <td>${esc(song.title || song.text)}</td>
             <td class="muted">${esc(song.artist)}</td>
-            <td class="num">${plays.toLocaleString("pl-PL")}</td>
+            <td class="num">${plays.toLocaleString(LOCALE)}</td>
             <td>
               <div class="bar-pill">
                 <div class="bar-track">
@@ -624,7 +613,7 @@ function _startListenersTick() {
 
 function _updateListenersTick() {
   const el = document.getElementById("listenersNextRefresh");
-  if (el) el.textContent = _listenersTick > 0 ? `Odświeżenie za ${_listenersTick}s` : "Odświeżam…";
+  if (el) el.textContent = _listenersTick > 0 ? `Refresh in ${_listenersTick}s` : "Refreshing…";
 }
 
 function _deviceIcon(device) {
@@ -639,7 +628,7 @@ function _fmtDuration(sec) {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
-  if (h > 0) return `${h}g ${m}min`;
+  if (h > 0) return `${h}h ${m}min`;
   if (m > 0) return `${m}min ${s}s`;
   return `${s}s`;
 }
@@ -662,10 +651,10 @@ async function loadListeners() {
     const geo = {};
     const ua = {};
     items.forEach((it) => {
-      const country = it.location?.country || "Nieznany";
+      const country = it.location?.country || "Unknown";
       geo[country] = (geo[country] || 0) + 1;
 
-      const client = it.device?.client || it.user_agent?.split(" ")[0] || "Inny";
+      const client = it.device?.client || "Other";
       ua[client] = (ua[client] || 0) + 1;
     });
 
@@ -700,7 +689,6 @@ async function loadListeners() {
 
     const tbody = document.getElementById("listenersBody");
     if (tbody) {
-      const prevSelected = tbody.querySelector("tr.selected")?.dataset?.hash || null;
       tbody.innerHTML = "";
 
       top30.forEach((it, idx) => {
@@ -714,21 +702,18 @@ async function loadListeners() {
         else if (country && region) locationText = `${region}, ${country}`;
         else if (city || country) locationText = city || country;
 
-        const clientFull = esc(it.device?.client || it.user_agent?.split(" ")[0] || "–");
+        const clientFull = esc(it.device?.client || "–");
         const icon = _deviceIcon(it.device);
         const mount = _mountBadge(it.mount_name);
-        const connectedAt = it.connected_on ? new Date(it.connected_on * 1000).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" }) : "–";
+        const connectedAt = it.connected_on ? new Date(it.connected_on * 1000).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" }) : "–";
 
         const rowClass = idx === 0 ? "listener-top" : "";
-        const selected = it.hash === prevSelected ? " selected" : "";
 
         const tr = document.createElement("tr");
-        tr.className = rowClass + selected;
-        tr.dataset.hash = it.hash || "";
+        tr.className = rowClass;
 
         tr.innerHTML = `
           <td class="num" style="width:28px;color:var(--text-muted);font-size:11px">${idx + 1}</td>
-          <td class="muted" style="font-family:monospace;font-size:11px">${esc(it.ip || "–")}</td>
           <td>${esc(locationText)}</td>
           <td title="${clientFull}" style="max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
             <span style="margin-right:4px">${icon}</span>${clientFull}
@@ -742,11 +727,11 @@ async function loadListeners() {
 
     const listenersCountEl = document.getElementById("listenersCount");
     if (listenersCountEl) {
-      listenersCountEl.textContent = `${items.length} aktywnych · top ${top30.length} wg czasu`;
+      listenersCountEl.textContent = `${items.length} active · showing the ${top30.length} longest connections`;
     }
 
     const tsEl = document.getElementById("listenersLastUpdate");
-    if (tsEl) tsEl.textContent = "Odświeżono: " + new Date().toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    if (tsEl) tsEl.textContent = "Refreshed: " + new Date().toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 
     document.getElementById("listenersTableCard").style.display = "block";
     document.getElementById("listenersEmpty").style.display = "none";
@@ -768,42 +753,6 @@ function startListenersPolling() {
 }
 
 // ──────────────────────────────────────────────
-// REQUESTS
-// ──────────────────────────────────────────────
-async function loadRequests() {
-  try {
-    const d = await apiFetch(`/station/${getSid()}/reports/requests`);
-
-    const items = Array.isArray(d) ? d : d.requests || d.results || [];
-    if (!items.length) return;
-
-    const max = Math.max(...items.map((it) => Number(it.count || it.request_count || 1)));
-    const tbody = document.getElementById("requestsBody");
-    if (!tbody) return;
-    tbody.innerHTML = "";
-    items.slice(0, 30).forEach((it, i) => {
-      const song = it.song || it.track || it;
-      const cnt = Number(it.count || it.request_count || 1);
-      const pct = max ? Math.round((cnt / max) * 100) : 0;
-      const badge = i === 0 ? "gold" : i === 1 ? "silver" : i === 2 ? "bronze" : "";
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><span class="rank-badge ${badge}">${i + 1}</span></td>
-        <td>${esc(song.title || song.text || "–")}</td>
-        <td class="muted">${esc(song.artist || "–")}</td>
-        <td class="num">${cnt.toLocaleString("pl-PL")}</td>
-        <td><div class="bar-pill"><div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:var(--live)"></div></div><span style="font-size:11px;color:var(--text-muted);min-width:28px;text-align:right">${pct}%</span></div></td>`;
-      tbody.appendChild(tr);
-    });
-    document.getElementById("requestsCard").style.display = "block";
-    document.getElementById("requestsEmpty").style.display = "none";
-  } catch (e) {
-    if (DEBUG) console.warn("[loadRequests]", e.message);
-    throw e;
-  }
-}
-
-// ──────────────────────────────────────────────
 // UTILS
 // ──────────────────────────────────────────────
 function esc(s) {
@@ -812,12 +761,6 @@ function esc(s) {
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
-}
-
-function formatTLH(seconds) {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return `${hours}h ${minutes}m`;
 }
 
 // ──────────────────────────────────────────────

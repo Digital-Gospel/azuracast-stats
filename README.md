@@ -1,356 +1,388 @@
 # AzuraCast Analytics Dashboard
 
-Statyczny, przeglądarkowy dashboard analityczny dla stacji internetowych opartych na [AzuraCast](https://www.azuracast.com/). Dane pobierane są przez bezpieczny proxy PHP — klucz API nigdy nie trafia do przeglądarki.
+A lightweight, self-hosted analytics dashboard for [AzuraCast](https://www.azuracast.com/).
 
----
+The project is intentionally simple: the browser uses a small PHP proxy to access selected AzuraCast API endpoints, while the AzuraCast API key remains server-side. No Node.js, Composer, database, or build step is required at runtime.
 
-## Spis treści
+## Features
 
-1. [Funkcje](#funkcje)
-2. [Struktura plików](#struktura-plików)
-3. [Wymagania](#wymagania)
-4. [Instalacja](#instalacja)
-5. [Konfiguracja](#konfiguracja)
-6. [Bezpieczeństwo](#bezpieczeństwo)
-7. [Logowanie](#logowanie)
-8. [API — proxowane endpointy](#api--proxowane-endpointy)
-9. [Architektura JS](#architektura-js)
-10. [Znane ograniczenia](#znane-ograniczenia)
+- Live listener count and current track information.
+- Hourly, weekday, and daily listener charts.
+- Best/worst listener-change rankings.
+- Recently played tracks.
+- Most played tracks for the selected history returned by AzuraCast.
+- Listener connection overview with country, location, player, stream, and connection duration.
+- Cloudflare Turnstile verification before API access.
+- Per-IP request rate limiting.
+- HTTPS-only upstream API validation with TLS certificate and hostname verification.
+- Strict allowlisting of proxied AzuraCast endpoints.
+- Security response headers and no-cache API responses.
+- Privacy filtering in the listener endpoint: raw listener IP addresses, raw user-agent strings, and listener hashes are removed before data reaches the browser.
+- Bundled Chart.js and Inter fonts, so normal application assets do not depend on a CDN.
+- Mobile-friendly interface.
 
----
+## Architecture
 
-## Funkcje
+```text
+Browser
+  |
+  | same-origin HTTPS
+  v
+index.html + js/
+  |
+  | Turnstile token
+  v
+turnstile-verify.php
+  |
+  | server-side verification
+  v
+Cloudflare Turnstile
 
-### Panel główny — zakładka *Przegląd*
-- Wskaźniki KPI: łączna liczba odsłon, szczyt godzinowy, najlepszy dzień tygodnia, najlepszy pojedynczy dzień
-- Wykresy: profil godzinowy (0–23h), rozkład według dnia tygodnia, historia dzienna
-
-### Zakładka *Słuchacze*
-- Pełna historia dzienna z endpointu `/reports/overview/charts`
-- Profil godzinowy i tygodniowy w wersji rozszerzonej
-
-### Zakładka *Utwory*
-- Ranking najlepszych i najgorszych utworów według zmiany liczby słuchaczy (`best-and-worst`)
-- TOP 30 najczęściej emitowanych z paskiem popularności (`/history`)
-
-### Zakładka *Połączenia* — live
-- **Odświeżanie co 30 sekund** z licznikiem odliczającym do następnego fetcha
-- TOP 30 aktywnych połączeń sortowanych malejąco po czasie trwania (`connected_time`)
-- Kolumny: `#` · IP · Lokalizacja · Odtwarzacz (z ikoną 📱/🌐/📻) · Strumień (badge MP3/HLS/AAC) · Czas połączenia · Godzina podłączenia
-- Podział geograficzny słuchaczy + wykres klientów (User-Agent) — odświeżane razem z tabelą
-- Wiersz #1 (najdłużej słuchający) wizualnie wyróżniony
-
-### Pasek live
-- Bieżąca liczba słuchaczy, unikalni, status online/offline, bitrate
-- Aktualnie grany utwór z artystą
-- Odświeżanie co 10 sekund
-
----
-
-## Struktura plików
-
-```
-projekt/
-│
-├── azuracast-stats.html          # Główna strona dashboardu
-├── azuracast-stats.js            # Logika aplikacji (vanilla JS, bez frameworka)
-│
-├── azuracast-api-proxy.php       # Proxy PHP — jedyna warstwa mająca dostęp do klucza API
-├── azuracast-api-proxy.env       # Szablon konfiguracji — SKOPIUJ poza document root
-│
-├── css/
-│   └── azuracast-stats.css       # Style dashboardu (dostarczane osobno)
-│
-└── js/
-    └── chart.umd.js              # Chart.js (lokalnie, bez CDN)
+Browser
+  |
+  | GET /azuracast-api-proxy.php?path=...
+  v
+azuracast-api-proxy.php
+  |
+  | X-API-Key (server-side only)
+  v
+AzuraCast API
 ```
 
-> **Uwaga:** `azuracast-api-proxy.env` to **szablon**. Docelowy plik z kluczem API musi znajdować się poza document root. Patrz [Konfiguracja](#konfiguracja).
+The frontend never contains the AzuraCast API key or the Turnstile secret key.
 
----
+## Requirements
 
-## Wymagania
+### Server
 
-| Komponent | Minimalna wersja | Uwagi |
-|-----------|-----------------|-------|
-| PHP | 8.1 | `declare(strict_types=1)`, `never` return type |
-| cURL extension | dowolna | `php-curl` |
-| AzuraCast | dowolna aktualna | API v0 (REST/JSON) |
-| Przeglądarka | Chrome 90+ / Firefox 88+ / Safari 15+ | ES2020, `fetch`, optional chaining |
+- PHP 7.4 or newer.
+- PHP cURL extension.
+- PHP sessions enabled.
+- HTTPS for production deployments.
+- A writable directory for rate-limit state.
+- A writable log destination when logging is enabled.
+- An AzuraCast server with API access.
+- A Cloudflare Turnstile site and secret key.
 
-Serwer WWW musi być skonfigurowany tak, żeby pliki `.env` **nie były dostępne przez HTTP** (patrz [Bezpieczeństwo](#bezpieczenstwo)).
+PHP 8.2+ is recommended for current production deployments. The source is kept compatible with PHP 7.4 to support older PHP-FPM installations.
 
----
+### Browser
 
-## Instalacja
+A current desktop or mobile browser with JavaScript enabled.
 
-### 1. Skopiuj pliki na serwer
+## Installation
 
-```bash
-# Wgraj do katalogu document root
-scp azuracast-stats.html azuracast-stats.js azuracast-api-proxy.php user@serwer:/var/www/html/radio/
+### 1. Copy the application
 
-# Utwórz podkatalogi i wgraj zasoby
-mkdir -p /var/www/html/radio/css /var/www/html/radio/js
-# Wgraj azuracast-stats.css i chart.umd.js
+Place the repository contents in the web document root, or in a subdirectory exposed by your web server.
+
+The public entry point is:
+
+```text
+index.html
 ```
 
-### 2. Umieść plik konfiguracyjny poza document root
+The following PHP files must be executable by the web server:
 
-```bash
-# Utwórz katalog na konfigurację (POZA /var/www/)
-sudo mkdir -p /etc/azuracast
-sudo cp azuracast-api-proxy.env /etc/azuracast/azuracast-api-proxy.env
-
-# Ustaw uprawnienia — tylko www-data może czytać
-sudo chown www-data:www-data /etc/azuracast/azuracast-api-proxy.env
-sudo chmod 640 /etc/azuracast/azuracast-api-proxy.env
+```text
+azuracast-api-proxy.php
+turnstile-verify.php
 ```
 
-### 3. Wskaż plik konfiguracyjny serwerowi WWW
+### 2. Configure the frontend
 
-**Apache** — w `VirtualHost` lub `.htaccess`:
-```apache
-SetEnv AZURACAST_PROXY_ENV /etc/azuracast/azuracast-api-proxy.env
+Edit:
+
+```text
+js/config.js
 ```
 
-**Nginx + php-fpm** — w puli fpm (`/etc/php/8.x/fpm/pool.d/www.conf`):
-```ini
-env[AZURACAST_PROXY_ENV] = /etc/azuracast/azuracast-api-proxy.env
-```
-
-**Docker** — w `docker-compose.yml`:
-```yaml
-environment:
-  AZURACAST_PROXY_ENV: /etc/azuracast/azuracast-api-proxy.env
-```
-
-### 4. Utwórz katalog logów
-
-```bash
-sudo mkdir -p /var/log/azuracast-proxy
-sudo chown www-data:www-data /var/log/azuracast-proxy
-sudo chmod 750 /var/log/azuracast-proxy
-```
-
-### 5. Uzupełnij konfigurację
-
-Otwórz `/etc/azuracast/azuracast-api-proxy.env` i ustaw wartości — przynajmniej:
-
-```dotenv
-AZURACAST_API_KEY=twoj-klucz-api-tylko-do-odczytu
-AZURACAST_BASE_URL=https://twoja-instancja.azuracast.com/api
-AZURACAST_STATION_ID=1
-```
-
-### 6. Sprawdź działanie
-
-Otwórz `https://twoja-domena/radio/azuracast-stats.html` — po kilku sekundach powinny załadować się wszystkie zakładki i pasek live.
-
----
-
-## Konfiguracja
-
-Wszystkie parametry ustawiane są w pliku `.env` lub jako zmienne środowiskowe. **Zmienne środowiskowe mają wyższy priorytet niż plik `.env`.**
-
-| Zmienna | Opis | Domyślna |
-|---------|------|----------|
-| `AZURACAST_API_KEY` | Klucz API AzuraCast (tylko do odczytu) | *(wymagana)* |
-| `AZURACAST_BASE_URL` | Bazowy URL API bez trailing slash | *(wymagana)* |
-| `AZURACAST_STATION_ID` | ID stacji (liczba całkowita) | `1` |
-| `LOG_LEVEL` | Poziom logowania: `standard` \| `debug` \| `off` | `standard` |
-| `LOG_FILE` | Ścieżka do pliku logu | *(wymagana dla logowania)* |
-| `RATE_LIMIT_RPM` | Maks. requestów per IP na minutę (`0` = wyłączony) | `60` |
-| `RATE_LIMIT_DIR` | Katalog na pliki stanu rate limitera | `/tmp/azuracast-proxy-rl` |
-| `CURL_CONNECT_TIMEOUT` | Timeout TCP connect (sekundy) | `5` |
-| `CURL_TIMEOUT` | Całkowity timeout requestu (sekundy) | `15` |
-| `ALLOWED_ORIGIN` | Dozwolony Origin CORS (pusty = wyłączony) | *(puste)* |
-
-### Klucz API
-
-W panelu AzuraCast: **Admin → API Keys → Dodaj nowy klucz** z uprawnieniami **tylko do odczytu** (`View Station`). Nie używaj klucza z uprawnieniami zapisu ani klucza administracyjnego.
-
----
-
-## Bezpieczeństwo
-
-### Ochrona pliku `.env`
-
-Plik konfiguracyjny **musi** leżeć poza document root (`/var/www/`). Jeśli z jakiegoś powodu musi znaleźć się wewnątrz — zablokuj dostęp HTTP:
-
-**Apache:**
-```apache
-<Files "*.env">
-    Require all denied
-</Files>
-```
-
-**Nginx:**
-```nginx
-location ~* \.env$ {
-    deny all;
-    return 404;
-}
-```
-
-### Nagłówki bezpieczeństwa HTTP (proxy PHP)
-
-Proxy wysyła automatycznie:
-
-| Nagłówek | Wartość |
-|----------|---------|
-| `X-Frame-Options` | `SAMEORIGIN` |
-| `Content-Security-Policy` | `default-src 'none'; frame-ancestors 'self'` |
-| `X-Content-Type-Options` | `nosniff` |
-| `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (tylko HTTPS) |
-| `Permissions-Policy` | `geolocation=(), camera=(), microphone=()` |
-
-### Rate limiting
-
-Proxy ogranicza liczbę requestów per IP do `RATE_LIMIT_RPM` (domyślnie 60/minutę). Przekroczenie limitu zwraca HTTP 429 z nagłówkiem `Retry-After: 60`. Stan przechowywany jest w plikach JSON w `RATE_LIMIT_DIR`.
-
-### Whitelist endpointów
-
-Proxy akceptuje **wyłącznie** następujące ścieżki (strict match, bez wildcard):
-
-```
-GET /station/{id}
-GET /station/{id}/nowplaying
-GET /station/{id}/reports/overview/charts
-GET /station/{id}/reports/overview/best-and-worst
-GET /station/{id}/history
-GET /station/{id}/listeners
-GET /station/{id}/reports/requests
-```
-
-Każde inne żądanie zwraca HTTP 403 i jest logowane jako `WARN`.
-
-### Pozostałe zabezpieczenia
-
-- **TLS**: cURL weryfikuje certyfikat upstream (`SSL_VERIFYPEER=true`, `SSL_VERIFYHOST=2`) — brak możliwości przypadkowego wyłączenia
-- **Header injection**: klucz API sanitizowany (usunięcie bajtów `< 0x20`) przed wstrzyknięciem do nagłówka cURL
-- **Informacje o błędach**: szczegóły błędów sieciowych trafiają wyłącznie do logu — klient dostaje ogólny komunikat
-- **POST wyłączony**: metody inne niż GET zwracają HTTP 405
-- **Przekierowania wyłączone**: `CURLOPT_FOLLOWLOCATION=false`
-- **Rozmiar pliku .env**: limit 64 KB przed wczytaniem do pamięci
-- **PHP timeout**: `set_time_limit(20)` jako dodatkowe zabezpieczenie obok `CURL_TIMEOUT`
-
----
-
-## Logowanie
-
-### Poziomy
-
-| Poziom | Co jest logowane |
-|--------|-----------------|
-| `off` | nic |
-| `standard` | błędy, ostrzeżenia, 403, sukcesy (INFO) |
-| `debug` | wszystko powyżej + każdy request, odpowiedź upstream, timing w ms |
-
-### Format wpisu
-
-```
-[2026-09-14 12:34:56.789] [INFO]  91.221.126.1 "GET /azuracast-api-proxy.php?path=..." OK [path=/station/1/listeners status=200 time_ms=87]
-[2026-09-14 12:35:01.123] [WARN]  5.5.5.5 "GET /azuracast-api-proxy.php?path=..." HTTP 403: Niedozwolony endpoint. [path=/station/1/admin ip=5.5.5.5]
-[2026-09-14 12:35:10.456] [ERROR] 1.2.3.4 "GET /azuracast-api-proxy.php?path=..." Błąd cURL [errno=6 error=Could not resolve host time_ms=5001]
-```
-
-### Rotacja logów (logrotate)
-
-Utwórz `/etc/logrotate.d/azuracast-proxy`:
-
-```
-/var/log/azuracast-proxy/access.log {
-    daily
-    rotate 30
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 640 www-data www-data
-}
-```
-
----
-
-## API — proxowane endpointy
-
-| Endpoint AzuraCast | Zastosowanie w dashboardzie |
-|--------------------|-----------------------------|
-| `GET /station/{id}` | Dane stacji (nazwa, shortcode, linki, technologia) |
-| `GET /station/{id}/nowplaying` | Pasek live: słuchacze, grany utwór, status, bitrate |
-| `GET /station/{id}/reports/overview/charts` | Wykresy historyczne, KPI |
-| `GET /station/{id}/reports/overview/best-and-worst` | Ranking wzrostów/spadków słuchaczy |
-| `GET /station/{id}/history` | TOP 30 najczęściej granych utworów |
-| `GET /station/{id}/listeners` | Aktywne połączenia (live, odświeżane co 30s) |
-| `GET /station/{id}/reports/requests` | Historia zamówień (zakładka domyślnie ukryta) |
-
----
-
-## Architektura JS
-
-Aplikacja to **vanilla JS bez frameworka** — jeden plik `azuracast-stats.js`. Nie wymaga bundlera ani node_modules.
-
-### Przepływ danych
-
-```
-window.load
-  └─ loadAll()
-       ├─ loadNowPlaying()  ──► setInterval co 10 s  (liveTimer)
-       │
-       └─ Promise.allSettled([        ← równolegle
-            loadCharts(),
-            loadBestWorst(),
-            loadMostPlayed(),
-            loadListeners(),
-          ])
-            └─ startListenersPolling() ──► setInterval co 30 s  (listenersTimer)
-```
-
-Błąd jednej sekcji nie blokuje pozostałych — `loadAll` zbiera je przez pomocnik `run()` i wyświetla zbiorczo po zakończeniu ładowania.
-
-### Kluczowe funkcje
-
-| Funkcja | Odpowiedzialność |
-|---------|-----------------|
-| `loadAll()` | Bootstrap: reset UI → fetch → ujawnienie paneli → zbiorcza obsługa błędów |
-| `apiFetch(path)` | Wrapper `fetch()` do proxy PHP, `cache: no-store` |
-| `loadNowPlaying()` | Pasek live, odświeżany co 10 s |
-| `loadCharts()` | Wykresy historyczne + KPI |
-| `loadBestWorst()` | Ranking best/worst |
-| `loadMostPlayed()` | TOP 30 z `/history` |
-| `loadListeners()` | Tabela połączeń live, geo, UA chart, ticker odliczający |
-| `startListenersPolling()` | Uruchamia interval 30 s dla `loadListeners` |
-| `showStatus()` / `hideStatus()` | Pasek statusu: ładowanie / błąd / ukrycie |
-| `makeChart(id, type, ...)` | Wrapper Chart.js z niszczeniem poprzedniego instance |
-| `_deviceIcon(device)` | Ikona urządzenia: 📱 mobile / 🌐 browser / 📻 player |
-| `_fmtDuration(sec)` | Formatowanie czasu: `3g 12min` / `45min 7s` / `12s` |
-| `_mountBadge(mountName)` | Badge strumienia: MP3 / HLS / AAC |
-
-### Stan globalny
+Example:
 
 ```js
-const DEBUG      = true;                        // console.warn w catch-ach (wyłącz na produkcji)
-const PROXY_URL  = "azuracast-api-proxy.php";   // ścieżka relatywna do proxy
-const STATION_ID = "1";                         // ID stacji
-
-let liveTimer      = null;   // interval 10 s → nowplaying
-let listenersTimer = null;   // interval 30 s → listeners
+window.APP_CONFIG = Object.freeze({
+  APP_VERSION: "2.3.0",
+  STATION_ID: 1,
+  TURNSTILE_SITE_KEY: "YOUR_TURNSTILE_SITE_KEY",
+  DEBUG: false,
+  LOCALE: "en-US",
+});
 ```
 
----
+`TURNSTILE_SITE_KEY` is a public value and is intentionally present in browser code.
 
-## Znane ograniczenia
+Set `STATION_ID` to the same numeric value that you configure for `AZURACAST_STATION_ID` on the server.
 
-- **`STATION_ID` w JS** jest hardcoded w `azuracast-stats.js`. Przy obsłudze wielu stacji zmień wartość przed wdrożeniem lub przekaż ją przez `data-` atrybut HTML i odczytaj przez `dataset`.
-- **Rate limiter** oparty na plikach nie skaluje się na środowiska multi-server bez shared filesystem. W takiej konfiguracji rozważ APCu lub Redis jako backend stanu limitera.
-- **Zakładka Zamówienia** jest domyślnie zakomentowana w HTML — endpoint `/reports/requests` nie jest dostępny we wszystkich konfiguracjach AzuraCast.
-- Dashboard odpytuje API co 10 s (live) i co 30 s (listeners). Przy dużej liczbie równoczesnych użytkowników dashboardu ustaw `RATE_LIMIT_RPM` odpowiednio wyżej lub skonfiguruj cache po stronie serwera WWW.
-- `DEBUG = true` w JS włącza `console.warn` dla każdego błędu sekcji. Przed wdrożeniem produkcyjnym ustaw `const DEBUG = false`.
+### 3. Configure the PHP backend
 
----
+Copy:
 
-## Licencja
+```text
+azuracast-api-proxy.env.example
+```
 
-© 2026 [Digital Gospel](https://www.digital-gospel.com) · All Rights Reserved
+to a private file outside the web document root, for example:
+
+```text
+/etc/azuracast-analytics/azuracast-api-proxy.env
+```
+
+Set the following environment variable for PHP:
+
+```text
+AZURACAST_PROXY_ENV=/etc/azuracast-analytics/azuracast-api-proxy.env
+```
+
+Do not put the real configuration file in Git.
+
+A minimal configuration looks like:
+
+```dotenv
+AZURACAST_API_KEY=CHANGE_ME
+AZURACAST_BASE_URL=https://your-azuracast.example/api
+AZURACAST_STATION_ID=1
+TURNSTILE_SECRET_KEY=CHANGE_ME
+TURNSTILE_EXPECTED_HOSTNAME=stats.example.com
+
+LOG_LEVEL=standard
+LOG_FILE=/var/log/azuracast-analytics/azuracast-api-proxy.log
+
+RATE_LIMIT_RPM=120
+RATE_LIMIT_DIR=/run/azuracast-analytics-rate-limit
+
+CURL_CONNECT_TIMEOUT=5
+CURL_TIMEOUT=15
+TURNSTILE_VERIFY_TIMEOUT=10
+TURNSTILE_SESSION_TTL=3600
+
+ALLOWED_ORIGIN=
+```
+
+### 4. Protect the configuration file
+
+The private environment file should not be inside the web document root.
+
+Recommended ownership and permissions are similar to:
+
+```bash
+chown root:www-data /etc/azuracast-analytics/azuracast-api-proxy.env
+chmod 640 /etc/azuracast-analytics/azuracast-api-proxy.env
+```
+
+Adjust the group to the account used by PHP-FPM on your server.
+
+### 5. Configure Turnstile
+
+Create a Turnstile site for the hostname where the dashboard will run.
+
+Put the public site key into:
+
+```text
+js/config.js
+```
+
+Put the secret key into:
+
+```text
+azuracast-api-proxy.env
+```
+
+The optional `TURNSTILE_EXPECTED_HOSTNAME` setting is recommended. When set, the backend accepts a successful Turnstile response only when the returned hostname matches the configured hostname exactly.
+
+### 6. Configure the AzuraCast API key
+
+Create a dedicated AzuraCast API key with the minimum read permissions required for the dashboard.
+
+Do not use an administrative credential in the repository.
+
+The API key is sent only by `azuracast-api-proxy.php` to the configured AzuraCast API.
+
+## Apache / PHP-FPM environment example
+
+The application expects `AZURACAST_PROXY_ENV` to be present in the PHP process environment.
+
+For Apache environments where `SetEnv` is available, an example is:
+
+```apache
+SetEnv AZURACAST_PROXY_ENV /etc/azuracast-analytics/azuracast-api-proxy.env
+```
+
+Make sure the PHP-FPM process can read the private file.
+
+For PHP-FPM pool configuration, the equivalent pattern is:
+
+```ini
+env[AZURACAST_PROXY_ENV] = /etc/azuracast-analytics/azuracast-api-proxy.env
+```
+
+Reload PHP-FPM after changing the pool configuration.
+
+## Security model
+
+The proxy deliberately exposes only these AzuraCast API paths:
+
+```text
+/station/{station_id}
+/station/{station_id}/nowplaying
+/station/{station_id}/reports/overview/charts
+/station/{station_id}/reports/overview/best-and-worst
+/station/{station_id}/history
+/station/{station_id}/listeners
+```
+
+Arbitrary upstream paths are rejected.
+
+The upstream URL must use HTTPS, redirects are disabled, and TLS certificate/hostname verification is explicitly enabled.
+
+The proxy also adds security headers including `X-Frame-Options`, `Content-Security-Policy`, `X-Content-Type-Options`, `Referrer-Policy`, and `Permissions-Policy`. HSTS is added when the request is served over HTTPS.
+
+### Listener privacy
+
+The `/listeners` response is sanitized before it is returned to the browser. The following fields are removed when present:
+
+```text
+ip
+remote_ip
+remoteIp
+user_agent
+hash
+```
+
+This is intentional. The dashboard does not require raw IP addresses or raw browser user-agent strings.
+
+Location information returned by AzuraCast can still be personal or sensitive depending on your deployment and local laws. Review your privacy requirements before making the dashboard publicly accessible.
+
+## Logging
+
+Available log levels:
+
+```text
+standard
+debug
+off
+```
+
+Use `standard` in production.
+
+`debug` should be used only during troubleshooting because it records more request metadata.
+
+Do not store logs inside the public document root.
+
+## Rate limiting
+
+The proxy uses a simple file-based per-IP rate limiter.
+
+Example:
+
+```dotenv
+RATE_LIMIT_RPM=120
+RATE_LIMIT_DIR=/run/azuracast-analytics-rate-limit
+```
+
+Set `RATE_LIMIT_RPM=0` only when you deliberately want rate limiting disabled.
+
+## Runtime dependencies
+
+The repository intentionally avoids a package manager at runtime.
+
+Bundled:
+
+- Chart.js 4.4.1.
+- Inter font files.
+
+External service dependency:
+
+- Cloudflare Turnstile for anti-bot verification.
+
+The application does not require npm, Composer, a database, or a JavaScript build pipeline to run.
+
+## Updating bundled assets
+
+When replacing Chart.js or Inter with another version, update the corresponding third-party notices and verify the license of the new asset version.
+
+## Repository safety
+
+Before creating a public Git repository, verify that the repository contains no:
+
+- API keys.
+- Turnstile secret keys.
+- Passwords.
+- Private URLs or hostnames.
+- Internal IP addresses.
+- Production log files.
+- Backups or database dumps.
+
+The included `.gitignore` excludes the runtime environment file and log files.
+
+## Project structure
+
+```text
+.
+├── index.html
+├── azuracast-api-proxy.php
+├── azuracast-api-proxy.env.example
+├── turnstile-verify.php
+├── includes/
+│   └── bootstrap.php
+├── js/
+│   ├── azuracast-stats.js
+│   ├── chart.umd.js
+│   └── config.js
+├── css/
+│   └── azuracast-stats.css
+├── fonts/
+│   └── Inter WOFF2 files
+├── licenses/
+│   ├── CHARTJS-MIT.txt
+│   └── OFL-1.1-Inter.txt
+├── .gitignore
+├── .gitattributes
+├── LICENSE
+├── NOTICE.md
+├── SECURITY.md
+└── README.md
+```
+
+## Development and verification
+
+No build step is required.
+
+Recommended local checks:
+
+```bash
+php -l includes/bootstrap.php
+php -l azuracast-api-proxy.php
+php -l turnstile-verify.php
+
+node --check js/config.js
+node --check js/azuracast-stats.js
+```
+
+Then serve the directory through a PHP-capable HTTPS web server and verify:
+
+1. Turnstile verification succeeds.
+2. The dashboard loads data from the configured AzuraCast station.
+3. The browser cannot access the AzuraCast API key.
+4. `/azuracast-api-proxy.php?path=/not-allowed` returns HTTP 403.
+5. Non-GET proxy requests return HTTP 405.
+6. Excessive proxy requests return HTTP 429.
+7. The listener response contains no raw IP, raw user-agent, or listener hash fields.
+
+## Author
+
+* **Piotr Wasilewski**
+* **Company:** [Digital Gospel](https://www.digital-gospel.com)
+* **GitHub:** [@skierdy](https://github.com/skierdy/)
+
+## License
+
+Original project code is released under the **MIT License**. See [`LICENSE`](LICENSE).
+
+The bundled third-party assets remain under their original licenses:
+
+- **Chart.js 4.4.1** — MIT License.
+- **Inter** font files — SIL Open Font License 1.1.
+
+See [`NOTICE.md`](NOTICE.md) and the files in [`licenses/`](licenses/) for details.
+
+AzuraCast and Cloudflare are trademarks of their respective owners. This project is not affiliated with or endorsed by either organization.

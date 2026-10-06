@@ -2,157 +2,62 @@
 declare(strict_types=1);
 
 /**
- * Read-only AzuraCast API Proxy — Live Radio Analytics Dashboard
+ * Read-only AzuraCast API proxy for the Analytics Dashboard.
  *
- * Architektura bezpieczeństwa:
- *  - Cała konfiguracja (klucz API, URL, station_id, timeouty) pochodzi z pliku .env
- *    lub zmiennych środowiskowych — ZERO hardcoded secrets w kodzie PHP.
- *  - Wyłącznie metoda GET; whitelist endpointów (strict match).
- *  - Rate limiting per IP oparty na plikach tymczasowych.
- *  - Logowanie w trybie standard i debug z maskowanym kluczem API.
- *  - Nagłówki bezpieczeństwa HTTP (CSP, HSTS, nosniff, frame-ancestors).
- *  - Jawna weryfikacja TLS (SSL_VERIFYPEER, SSL_VERIFYHOST).
- *  - Sanitizacja klucza API przed wstrzyknięciem do nagłówka cURL.
- *  - Szczegóły błędów sieciowych logowane wewnętrznie, nie ujawniane klientowi.
+ * The browser never receives the AzuraCast API key.
  *
- * Wymagane zmienne środowiskowe (lub plik .env wskazany przez AZURACAST_PROXY_ENV):
- *   AZURACAST_API_KEY        – klucz API (tylko do odczytu)
- *   AZURACAST_BASE_URL       – bazowy URL API bez trailing slash
- *   AZURACAST_STATION_ID     – ID stacji (liczba całkowita)
- *   LOG_LEVEL                – standard | debug | off
- *   LOG_FILE                 – ścieżka do pliku logu
- *   RATE_LIMIT_RPM           – max requestów/IP/minutę (0 = wyłączony)
- *   RATE_LIMIT_DIR           – katalog na stan rate limitera
- *   CURL_CONNECT_TIMEOUT     – timeout TCP connect (s)
- *   CURL_TIMEOUT             – całkowity timeout cURL (s)
- *   ALLOWED_ORIGIN           – dozwolony Origin CORS (opcjonalny)
+ * Security controls:
+ * - GET-only request handling.
+ * - Strict endpoint allowlist.
+ * - Server-side API credentials only.
+ * - Per-IP rate limiting.
+ * - HTTPS-only upstream validation.
+ * - TLS certificate/hostname verification.
+ * - Security response headers.
+ * - Generic client errors with internal details kept in logs.
+ * - Listener privacy filtering: raw IP, user-agent and listener hash are removed.
  */
 
-const SECRET_FILE = './azuracast-api-proxy.env';
+require_once __DIR__ . '/includes/bootstrap.php';
 
-// ─────────────────────────────────────────────────────────────
-// 0. BOOTSTRAP
-// ─────────────────────────────────────────────────────────────
+set_time_limit(20);
+ignore_user_abort(false);
+error_reporting(0);
 
-set_time_limit(20);                // PHP-level safety net
-ignore_user_abort(false);          // nie kontynuuj gdy klient się rozłączy
-error_reporting(0);                // wyłącz wyświetlanie błędów w produkcji
+sendSecurityHeaders();
 
-// Inicjalizacja sesji dla weryfikacji Turnstile (jeśli wymagane)
-session_start();
-if (empty($_SESSION['cf_verified'])) {
-    http_response_code(403);
-    header('Content-Type: application/json; charset=utf-8');
-    echo json_encode(['error' => 'Brak autoryzacji Cloudflare Turnstile.', 'status' => 403]);
-    proxyLog('WARN', 'Brak autoryzacji Cloudflare Turnstile.', ['status' => '403']);
+try {
+    loadEnvFile();
+} catch (RuntimeException $e) {
+    http_response_code(500);
+    echo json_encode(
+        ['error' => 'Server configuration error.', 'status' => 500],
+        JSON_UNESCAPED_SLASHES
+    );
     exit;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 1. KONFIGURACJA — wczytana wyłącznie z .env / zmiennych środowiskowych
-// ─────────────────────────────────────────────────────────────
+startSecureSession();
 
 /**
- * Wczytuje zmienne z pliku .env (format KEY=VALUE, komentarze #, cudzysłowy opcjonalne).
- * Plik .env wskazywany przez zmienną środowiskową AZURACAST_PROXY_ENV.
- * Istniejące zmienne środowiskowe mają WYŻSZY priorytet niż plik .env.
- *
- * @throws RuntimeException gdy plik jest zbyt duży lub nieczytelny
+ * Log levels.
  */
-function loadEnvFile(): void
-{
-    if (file_exists(SECRET_FILE)) {
-        $envPath = SECRET_FILE;
-    } else {
-        $envPath = getenv('AZURACAST_PROXY_ENV');
-        if ($envPath === false || trim($envPath) === '') {
-            return; // brak pliku — polegamy wyłącznie na zmiennych środowiskowych
-        }
-    }
-
-    $envPath = trim($envPath);
-
-    if (!file_exists($envPath)) {
-        throw new RuntimeException("Plik .env nie istnieje: {$envPath}");
-    }
-
-    if (!is_readable($envPath)) {
-        throw new RuntimeException("Plik .env jest nieczytelny: {$envPath}");
-    }
-
-    // Ochrona przed bardzo dużymi plikami (max 64 KB)
-    $size = filesize($envPath);
-    if ($size === false || $size > 65536) {
-        throw new RuntimeException('Plik .env jest zbyt duży (limit 64 KB).');
-    }
-
-    $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
-    if ($lines === false) {
-        throw new RuntimeException("Nie można odczytać pliku .env: {$envPath}");
-    }
-
-    foreach ($lines as $lineNo => $line) {
-        $line = trim($line);
-
-        // Pomiń komentarze i puste linie
-        if ($line === '' || $line[0] === '#') {
-            continue;
-        }
-
-        // Format: KEY=VALUE (VALUE opcjonalnie w cudzysłowach)
-        if (!preg_match('/^([A-Z][A-Z0-9_]*)=(.*)$/', $line, $m)) {
-            continue; // nieprawidłowa linia — ignoruj zamiast przerywać
-        }
-
-        $key   = $m[1];
-        $value = trim($m[2]);
-
-        // Usuń opcjonalne cudzysłowy
-        if (strlen($value) >= 2
-            && (($value[0] === '"'  && $value[-1] === '"')
-             || ($value[0] === "'"  && $value[-1] === "'"))) {
-            $value = substr($value, 1, -1);
-        }
-
-        // Istniejące zmienne środowiskowe mają wyższy priorytet
-        if (getenv($key) === false) {
-            putenv("{$key}={$value}");
-            $_ENV[$key] = $value;
-        }
-    }
-}
-
-/**
- * Pobiera zmienną konfiguracyjną (env → $_ENV → default).
- */
-function cfg(string $key, string $default = ''): string
-{
-    $v = getenv($key);
-    if ($v !== false && $v !== '') {
-        return $v;
-    }
-    return $_ENV[$key] ?? $default;
-}
-
-// ─────────────────────────────────────────────────────────────
-// 2. LOGOWANIE
-// ─────────────────────────────────────────────────────────────
-
-/**
- * Poziomy logowania.
- */
-const LOG_OFF      = 0;
+const LOG_OFF = 0;
 const LOG_STANDARD = 1;
-const LOG_DEBUG    = 2;
+const LOG_DEBUG = 2;
 
-$logLevel = LOG_STANDARD; // zostanie nadpisany po załadowaniu .env
+$_logLevelConfig = strtolower(cfg('LOG_LEVEL', 'standard'));
+if ($_logLevelConfig === 'debug') {
+    $logLevel = LOG_DEBUG;
+} elseif ($_logLevelConfig === 'off') {
+    $logLevel = LOG_OFF;
+} else {
+    $logLevel = LOG_STANDARD;
+}
+unset($_logLevelConfig);
 
 /**
- * Zapisuje wpis do logu.
- *
- * @param string $severity  ERROR | WARN | INFO | DEBUG
- * @param string $message   Treść logu
- * @param array  $context   Dodatkowe dane (klucze => wartości)
+ * Write a proxy log entry.
  */
 function proxyLog(string $severity, string $message, array $context = []): void
 {
@@ -161,177 +66,141 @@ function proxyLog(string $severity, string $message, array $context = []): void
     if ($logLevel === LOG_OFF) {
         return;
     }
+
     if ($severity === 'DEBUG' && $logLevel < LOG_DEBUG) {
         return;
     }
 
     $logFile = cfg('LOG_FILE', '');
     if ($logFile === '') {
-        return; // logowanie wyłączone gdy brak ścieżki
+        return;
     }
 
-    $ts      = (new DateTimeImmutable())->format('Y-m-d H:i:s.v');
-    $ip      = $_SERVER['REMOTE_ADDR'] ?? '–';
-    $method  = $_SERVER['REQUEST_METHOD'] ?? '–';
-    $uri     = $_SERVER['REQUEST_URI'] ?? '–';
+    $timestamp = (new DateTimeImmutable())->format('Y-m-d H:i:s.v');
+    $ip = $_SERVER['REMOTE_ADDR'] ?? '-';
+    $method = $_SERVER['REQUEST_METHOD'] ?? '-';
+    $uri = $_SERVER['REQUEST_URI'] ?? '-';
 
-    $ctxStr = '';
-    if (!empty($context)) {
+    $contextText = '';
+    if ($context !== []) {
         $parts = [];
-        foreach ($context as $k => $v) {
-            $parts[] = "{$k}=" . (is_string($v) ? $v : json_encode($v));
+        foreach ($context as $key => $value) {
+            $parts[] = $key . '=' . (is_string($value) ? $value : json_encode($value));
         }
-        $ctxStr = ' [' . implode(' ', $parts) . ']';
+        $contextText = ' [' . implode(' ', $parts) . ']';
     }
 
-    $line = "[{$ts}] [{$severity}] {$ip} \"{$method} {$uri}\" {$message}{$ctxStr}" . PHP_EOL;
+    $line = "[{$timestamp}] [{$severity}] {$ip} \"{$method} {$uri}\" {$message}{$contextText}" . PHP_EOL;
 
-    // Użyj file_put_contents z LOCK_EX — bezpieczne przy równoległych requestach
-    $dir = dirname($logFile);
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0750, true);
+    $directory = dirname($logFile);
+    if (!is_dir($directory)) {
+        @mkdir($directory, 0750, true);
     }
 
     @file_put_contents($logFile, $line, FILE_APPEND | LOCK_EX);
 }
 
-// ─────────────────────────────────────────────────────────────
-// 3. OBSŁUGA BŁĘDÓW PROXY
-// ─────────────────────────────────────────────────────────────
-
 /**
- * Wysyła odpowiedź JSON z błędem, loguje i kończy skrypt.
- *
- * @param string $public   Komunikat dla klienta (nie ujawnia szczegółów wewnętrznych)
- * @param int    $status   HTTP status code
- * @param string $internal Szczegóły do loga (nie trafiają do klienta)
+ * Return a JSON error and terminate the request.
  */
-function jsonError(string $public, int $status = 500, string $internal = ''): void
+function jsonError(string $publicMessage, int $status = 500, string $internalMessage = ''): void
 {
-    if ($status >= 500) {
-        $severity = 'ERROR';
-    } elseif ($status === 403) {
-        $severity = 'WARN';
-    } else {
-        $severity = 'INFO';
-    }
+    $severity = $status >= 500 ? 'ERROR' : ($status === 403 ? 'WARN' : 'INFO');
 
-    proxyLog($severity, "HTTP {$status}: {$public}" . ($internal !== '' ? " | internal: {$internal}" : ''));
+    proxyLog(
+        $severity,
+        "HTTP {$status}: {$publicMessage}" .
+        ($internalMessage !== '' ? " | internal: {$internalMessage}" : '')
+    );
 
     http_response_code($status);
+
     echo json_encode(
-        ['error' => $public, 'status' => $status],
-        JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+        ['error' => $publicMessage, 'status' => $status],
+        JSON_UNESCAPED_SLASHES
     );
+
     exit;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 4. RATE LIMITING — prosty per-IP, oparty na plikach tymczasowych
-// ─────────────────────────────────────────────────────────────
-
 /**
- * Sprawdza limit requestów per IP (okno 60 sekund).
- * Używa pliku blokującego (flock) zamiast bazy danych.
- *
- * @return bool true = limit przekroczony
+ * Check whether the current IP exceeded the configured request rate.
  */
 function isRateLimited(): bool
 {
-    $rpm = (int) cfg('RATE_LIMIT_RPM', '60');
-    if ($rpm <= 0) {
-        return false; // rate limiting wyłączony
+    $requestsPerMinute = (int) cfg('RATE_LIMIT_RPM', '120');
+    if ($requestsPerMinute <= 0) {
+        return false;
     }
 
-    $dir = cfg('RATE_LIMIT_DIR', sys_get_temp_dir() . '/azuracast-proxy-rl');
-    if (!is_dir($dir)) {
-        @mkdir($dir, 0700, true);
+    $directory = cfg(
+        'RATE_LIMIT_DIR',
+        sys_get_temp_dir() . '/azuracast-analytics-rate-limit'
+    );
+
+    if (!is_dir($directory)) {
+        @mkdir($directory, 0700, true);
     }
 
-    $ip      = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    $safeIp  = preg_replace('/[^a-fA-F0-9:.\_-]/', '_', $ip);
-    $file    = $dir . '/rl_' . $safeIp . '.json';
-    $now     = time();
-    $window  = 60; // sekundy
+    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
+    $safeIp = preg_replace('/[^a-fA-F0-9:._-]/', '_', $ip) ?? 'unknown';
+    $file = $directory . '/rl_' . $safeIp . '.json';
 
-    $fh = @fopen($file, 'c+');
-    if ($fh === false) {
-        proxyLog('WARN', 'Rate limiter: nie można otworzyć pliku stanu', ['file' => $file]);
-        return false; // fail open — lepsze niż blokowanie przy błędach FS
+    $now = time();
+    $window = 60;
+
+    $handle = @fopen($file, 'c+');
+    if ($handle === false) {
+        // Fail open if the filesystem is unavailable; log the problem.
+        proxyLog('WARN', 'Rate limiter state file could not be opened', ['file' => $file]);
+        return false;
     }
 
-    flock($fh, LOCK_EX);
+    if (!flock($handle, LOCK_EX)) {
+        fclose($handle);
+        proxyLog('WARN', 'Rate limiter state file could not be locked', ['file' => $file]);
+        return false;
+    }
 
-    $data    = json_decode(stream_get_contents($fh) ?: '{}', true) ?: [];
-    $hits    = is_array($data['hits'] ?? null) ? $data['hits'] : [];
+    $content = stream_get_contents($handle);
+    $data = json_decode($content ?: '{}', true);
+    $hits = is_array($data['hits'] ?? null) ? $data['hits'] : [];
 
-    // Usuń wpisy spoza okna czasowego
-    $hits = array_filter($hits, static fn(int $t) => $t > $now - $window);
+    $hits = array_values(array_filter(
+        $hits,
+        static fn ($timestamp): bool =>
+            is_numeric($timestamp) && (int) $timestamp > $now - $window
+    ));
+
     $hits[] = $now;
+    $exceeded = count($hits) > $requestsPerMinute;
 
-    $exceeded = count($hits) > $rpm;
+    rewind($handle);
+    ftruncate($handle, 0);
+    fwrite($handle, json_encode(['hits' => $hits]));
+    fflush($handle);
 
-    rewind($fh);
-    ftruncate($fh, 0);
-    fwrite($fh, json_encode(['hits' => array_values($hits)]));
-    flock($fh, LOCK_UN);
-    fclose($fh);
+    flock($handle, LOCK_UN);
+    fclose($handle);
 
     return $exceeded;
 }
 
-// ─────────────────────────────────────────────────────────────
-// 5. NAGŁÓWKI BEZPIECZEŃSTWA HTTP
-// ─────────────────────────────────────────────────────────────
-
-function sendSecurityHeaders(): void
-{
-    // Nie ujawniaj wersji PHP
-    header_remove('X-Powered-By');
-
-    // Blokuj osadzanie w ramkach (tylko same-origin)
-    header('X-Frame-Options: SAMEORIGIN');
-    header("Content-Security-Policy: default-src 'none'; frame-ancestors 'self'");
-
-    // Chroń przed MIME sniffingiem
-    header('X-Content-Type-Options: nosniff');
-
-    // Ogranicz referrer
-    header('Referrer-Policy: strict-origin-when-cross-origin');
-
-    // HSTS — wymuszaj HTTPS przez rok (tylko gdy jesteś na HTTPS)
-    if ((!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
-        || ($_SERVER['SERVER_PORT'] ?? 80) == 443) {
-        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
-    }
-
-    // Ogranicz dostęp do czułych API przeglądarki
-    header('Permissions-Policy: geolocation=(), camera=(), microphone=()');
-
-    // Cache: odpowiedzi proxy nie powinny być cachowane
-    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
-    header('Pragma: no-cache');
-
-    // Content-Type zawsze JSON
-    header('Content-Type: application/json; charset=utf-8');
-}
-
-// ─────────────────────────────────────────────────────────────
-// 6. CORS — opcjonalnie, tylko gdy skonfigurowany ALLOWED_ORIGIN
-// ─────────────────────────────────────────────────────────────
-
+/**
+ * Handle optional exact-match CORS.
+ */
 function handleCors(): void
 {
-    $allowedOrigin = cfg('ALLOWED_ORIGIN', '');
+    $allowedOrigin = trim(cfg('ALLOWED_ORIGIN', ''));
+
     if ($allowedOrigin === '') {
-        return; // CORS wyłączony — same-origin only
+        return;
     }
 
     $requestOrigin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
-    // Porównanie exact match (nie wildcard, nie contains)
     if ($requestOrigin !== $allowedOrigin) {
-        return; // nieznany origin — nie dodaj nagłówka CORS (przeglądarka zablokuje)
+        return;
     }
 
     header('Access-Control-Allow-Origin: ' . $allowedOrigin);
@@ -339,106 +208,148 @@ function handleCors(): void
     header('Access-Control-Allow-Headers: Accept');
     header('Vary: Origin');
 
-    // Preflight OPTIONS
     if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
         http_response_code(204);
         exit;
     }
 }
 
-// ─────────────────────────────────────────────────────────────
-// 7. SANITIZACJA KLUCZA API (ochrona przed cURL header injection)
-// ─────────────────────────────────────────────────────────────
+/**
+ * Validate the Turnstile-backed session.
+ */
+function requireTurnstileVerification(): void
+{
+    $verifiedAt = (int) ($_SESSION['cf_verified_at'] ?? 0);
+    $ttl = max(60, (int) cfg('TURNSTILE_SESSION_TTL', '3600'));
+
+    if (
+        empty($_SESSION['cf_verified']) ||
+        $verifiedAt <= 0 ||
+        time() - $verifiedAt > $ttl
+    ) {
+        unset($_SESSION['cf_verified'], $_SESSION['cf_verified_at']);
+
+        http_response_code(403);
+        echo json_encode(
+            ['error' => 'Security verification required.', 'status' => 403],
+            JSON_UNESCAPED_SLASHES
+        );
+
+        proxyLog('WARN', 'Turnstile verification missing or expired');
+        exit;
+    }
+}
 
 /**
- * Usuwa wszystkie znaki sterujące (w tym CR, LF) z klucza API.
- * Zapobiega header injection gdyby klucz zawierał \r\n.
+ * Remove credentials/control characters before putting the API key into a header.
  */
 function sanitizeApiKey(string $key): string
 {
-    // Usuń wszystkie bajty < 0x20 i 0x7F
     $clean = preg_replace('/[\x00-\x1F\x7F]/', '', $key);
+
     if ($clean === null || $clean !== $key) {
-        proxyLog('WARN', 'Klucz API zawierał niedozwolone znaki sterujące — zostały usunięte');
+        proxyLog('WARN', 'API key contained control characters; they were removed');
     }
+
     return $clean ?? '';
 }
 
-// ─────────────────────────────────────────────────────────────
-// 8. ŁADOWANIE KONFIGURACJI
-// ─────────────────────────────────────────────────────────────
+/**
+ * Strip listener identifiers and raw network/browser fingerprints from the response.
+ *
+ * The dashboard does not need these fields. Removing them at the proxy prevents
+ * them from reaching the browser and reduces privacy exposure.
+ */
+function sanitizeListenersPayload(string $body): string
+{
+    $decoded = json_decode($body, true);
 
-// Najpierw nagłówki (zawsze, nawet przed błędem konfiguracji)
-sendSecurityHeaders();
+    if (!is_array($decoded)) {
+        return $body;
+    }
+
+    if (isset($decoded['listeners']) && is_array($decoded['listeners'])) {
+        $decoded['listeners'] = array_map('sanitizeListenerItem', $decoded['listeners']);
+    } elseif (isset($decoded['results']) && is_array($decoded['results'])) {
+        $decoded['results'] = array_map('sanitizeListenerItem', $decoded['results']);
+    } elseif (isSequentialArray($decoded)) {
+        $decoded = array_map('sanitizeListenerItem', $decoded);
+    }
+
+    $encoded = json_encode($decoded, JSON_UNESCAPED_SLASHES);
+    return $encoded === false ? $body : $encoded;
+}
+
+/**
+ * Strip direct identifiers from one listener item.
+ */
+function isSequentialArray(array $value): bool
+{
+    if ($value === []) {
+        return true;
+    }
+
+    return array_keys($value) === range(0, count($value) - 1);
+}
+
+/**
+ * Strip direct identifiers from one listener item.
+ */
+function sanitizeListenerItem(array $item): array
+{
+    unset(
+        $item['ip'],
+        $item['remote_ip'],
+        $item['remoteIp'],
+        $item['user_agent'],
+        $item['hash']
+    );
+
+    return $item;
+}
+
 handleCors();
+requireTurnstileVerification();
 
-// Załaduj .env
-try {
-    loadEnvFile();
-} catch (RuntimeException $e) {
-    jsonError('Błąd konfiguracji serwera.', 500, $e->getMessage());
-}
-
-// Ustaw poziom logowania po załadowaniu .env
-$_logLevelCfg = cfg('LOG_LEVEL', 'standard');
-if ($_logLevelCfg === 'debug') {
-    $logLevel = LOG_DEBUG;
-} elseif ($_logLevelCfg === 'off') {
-    $logLevel = LOG_OFF;
-} else {
-    $logLevel = LOG_STANDARD;
-}
-unset($_logLevelCfg);
-
-// Odczytaj konfigurację
-$baseUrl   = rtrim(cfg('AZURACAST_BASE_URL'), '/');
-$stationId = (int) cfg('AZURACAST_STATION_ID', '1');
-$apiKey    = sanitizeApiKey(cfg('AZURACAST_API_KEY', ''));
-$curlConnectTimeout = (int) cfg('CURL_CONNECT_TIMEOUT', '5');
-$curlTimeout        = (int) cfg('CURL_TIMEOUT', '15');
-
-// Walidacja wymaganych wartości
-if ($baseUrl === '') {
-    jsonError('Błąd konfiguracji serwera.', 500, 'AZURACAST_BASE_URL nie jest ustawiony.');
-}
-if ($stationId <= 0) {
-    jsonError('Błąd konfiguracji serwera.', 500, 'AZURACAST_STATION_ID nieprawidłowy: ' . cfg('AZURACAST_STATION_ID'));
-}
-if ($apiKey === '') {
-    jsonError('Błąd konfiguracji serwera.', 500, 'AZURACAST_API_KEY nie jest ustawiony.');
-}
-
-// Walidacja URL — musi być https:// (nie http://)
-if (!preg_match('#^https://#', $baseUrl)) {
-    jsonError('Błąd konfiguracji serwera.', 500, 'AZURACAST_BASE_URL musi używać HTTPS: ' . $baseUrl);
-}
-
-// ─────────────────────────────────────────────────────────────
-// 9. WALIDACJA ŻĄDANIA
-// ─────────────────────────────────────────────────────────────
-
-// Tylko GET
 if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'GET') {
     header('Allow: GET');
-    jsonError('Dozwolone jest wyłącznie żądanie GET.', 405);
+    jsonError('Only GET requests are allowed.', 405);
 }
 
-// Rate limiting
 if (isRateLimited()) {
-    $ip = $_SERVER['REMOTE_ADDR'] ?? '–';
-    proxyLog('WARN', 'Rate limit przekroczony', [
-        'ip'  => $ip,
-        'rpm' => cfg('RATE_LIMIT_RPM', '60'),
+    proxyLog('WARN', 'Rate limit exceeded', [
+        'rpm' => cfg('RATE_LIMIT_RPM', '120'),
     ]);
+
     header('Retry-After: 60');
-    jsonError('Zbyt wiele żądań. Spróbuj za chwilę.', 429);
+    jsonError('Too many requests. Please try again later.', 429);
 }
 
-// Walidacja i normalizacja ścieżki
-$rawPath = isset($_GET['path']) ? rawurldecode((string) $_GET['path']) : '';
-$path    = '/' . ltrim($rawPath, '/');
+$baseUrl = rtrim(cfg('AZURACAST_BASE_URL'), '/');
+$stationId = (int) cfg('AZURACAST_STATION_ID', '1');
+$apiKey = sanitizeApiKey(cfg('AZURACAST_API_KEY', ''));
+$connectTimeout = max(1, (int) cfg('CURL_CONNECT_TIMEOUT', '5'));
+$timeout = max(1, (int) cfg('CURL_TIMEOUT', '15'));
 
-// Whitelist endpointów — strict match (in_array z true)
+if ($baseUrl === '') {
+    jsonError('Server configuration error.', 500, 'AZURACAST_BASE_URL is not set.');
+}
+
+if ($stationId <= 0) {
+    jsonError('Server configuration error.', 500, 'AZURACAST_STATION_ID must be a positive integer.');
+}
+
+if ($apiKey === '') {
+    jsonError('Server configuration error.', 500, 'AZURACAST_API_KEY is not set.');
+}
+
+if (!preg_match('#^https://#i', $baseUrl)) {
+    jsonError('Server configuration error.', 500, 'AZURACAST_BASE_URL must use HTTPS.');
+}
+
+$rawPath = isset($_GET['path']) ? rawurldecode((string) $_GET['path']) : '';
+$path = '/' . ltrim($rawPath, '/');
+
 $allowed = [
     "/station/{$stationId}",
     "/station/{$stationId}/nowplaying",
@@ -446,117 +357,101 @@ $allowed = [
     "/station/{$stationId}/reports/overview/best-and-worst",
     "/station/{$stationId}/history",
     "/station/{$stationId}/listeners",
-    "/station/{$stationId}/reports/requests",
 ];
 
 if (!in_array($path, $allowed, true)) {
-    proxyLog('WARN', 'Niedozwolony endpoint', [
-        'path'     => $path,
-        'raw_path' => $rawPath,
-        'ip'       => $_SERVER['REMOTE_ADDR'] ?? '–',
+    proxyLog('WARN', 'Endpoint rejected', [
+        'path' => $path,
+        'ip' => $_SERVER['REMOTE_ADDR'] ?? '-',
     ]);
-    jsonError('Niedozwolony endpoint.', 403);
+
+    jsonError('Endpoint is not allowed.', 403);
 }
 
-proxyLog('DEBUG', 'Żądanie zaakceptowane', [
-    'path'      => $path,
-    'ip'        => $_SERVER['REMOTE_ADDR'] ?? '–',
-    'user_agent' => substr($_SERVER['HTTP_USER_AGENT'] ?? '–', 0, 80),
+proxyLog('DEBUG', 'Request accepted', [
+    'path' => $path,
+    'user_agent' => substr($_SERVER['HTTP_USER_AGENT'] ?? '-', 0, 80),
 ]);
-
-// ─────────────────────────────────────────────────────────────
-// 10. ŻĄDANIE DO UPSTREAM API (cURL)
-// ─────────────────────────────────────────────────────────────
 
 $upstreamUrl = $baseUrl . $path;
 
-$ch = curl_init($upstreamUrl);
-if ($ch === false) {
-    jsonError('Wewnętrzny błąd serwera.', 500, 'curl_init() zwróciło false');
+if (!function_exists('curl_init')) {
+    jsonError('The PHP cURL extension is required.', 500, 'curl_init() is not available.');
 }
 
-curl_setopt_array($ch, [
+$curl = curl_init($upstreamUrl);
+if ($curl === false) {
+    jsonError('Internal server error.', 500, 'curl_init() returned false.');
+}
+
+curl_setopt_array($curl, [
     CURLOPT_RETURNTRANSFER => true,
-    CURLOPT_FOLLOWLOCATION => false,           // nie podążaj za przekierowaniami
-
-    // Timeouty z konfiguracji
-    CURLOPT_CONNECTTIMEOUT => max(1, $curlConnectTimeout),
-    CURLOPT_TIMEOUT        => max(1, $curlTimeout),
-
-    // Jawna weryfikacja TLS — nie polegaj na domyślnych wartościach
+    CURLOPT_FOLLOWLOCATION => false,
+    CURLOPT_CONNECTTIMEOUT => $connectTimeout,
+    CURLOPT_TIMEOUT => $timeout,
     CURLOPT_SSL_VERIFYPEER => true,
     CURLOPT_SSL_VERIFYHOST => 2,
-
-    // Nagłówki — klucz API po sanitizacji
     CURLOPT_HTTPHEADER => [
         'Accept: application/json',
         'X-API-Key: ' . $apiKey,
-        'User-Agent: AzuraCast-Proxy/2.0',
+        'User-Agent: AzuraCast-Analytics-Dashboard/2.3',
     ],
-
-    // Nie wysyłaj ciasteczek z serwera proxy
     CURLOPT_COOKIE => '',
 ]);
 
-$tsStart  = microtime(true);
-$body     = curl_exec($ch);
-$elapsed  = round((microtime(true) - $tsStart) * 1000); // ms
+$start = microtime(true);
+$body = curl_exec($curl);
+$elapsedMs = round((microtime(true) - $start) * 1000);
 
-$curlErrno = curl_errno($ch);
-$curlError = curl_error($ch);
-$httpStatus  = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-$contentType = (string) curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
-curl_close($ch);
+$curlErrno = curl_errno($curl);
+$curlError = curl_error($curl);
+$httpStatus = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
+$contentType = (string) curl_getinfo($curl, CURLINFO_CONTENT_TYPE);
 
-// ─────────────────────────────────────────────────────────────
-// 11. OBSŁUGA ODPOWIEDZI UPSTREAM
-// ─────────────────────────────────────────────────────────────
+curl_close($curl);
 
-// Błąd sieciowy cURL
 if ($body === false || $curlErrno !== 0) {
-    proxyLog('ERROR', 'Błąd cURL', [
-        'errno'   => $curlErrno,
-        'error'   => $curlError,   // szczegóły tylko w logu, nie dla klienta
-        'path'    => $path,
-        'time_ms' => $elapsed,
+    proxyLog('ERROR', 'cURL request failed', [
+        'errno' => $curlErrno,
+        'error' => $curlError,
+        'path' => $path,
+        'time_ms' => $elapsedMs,
     ]);
-    jsonError('Nie można połączyć się z serwerem radia.', 502);
+
+    jsonError('Unable to connect to the AzuraCast server.', 502);
 }
 
-proxyLog('DEBUG', 'Odpowiedź upstream', [
-    'path'           => $path,
-    'http_status'    => $httpStatus,
-    'content_type'   => strtok($contentType, ';'),
-    'body_bytes'     => strlen((string) $body),
-    'time_ms'        => $elapsed,
+proxyLog('DEBUG', 'Upstream response received', [
+    'path' => $path,
+    'http_status' => $httpStatus,
+    'content_type' => strtok($contentType, ';'),
+    'body_bytes' => strlen((string) $body),
+    'time_ms' => $elapsedMs,
 ]);
 
-// Błąd HTTP po stronie upstream
 if ($httpStatus < 200 || $httpStatus >= 300) {
     $safeStatus = ($httpStatus >= 400 && $httpStatus <= 599) ? $httpStatus : 502;
 
-    proxyLog('ERROR', 'Upstream zwrócił błąd HTTP', [
+    proxyLog('ERROR', 'Upstream returned an HTTP error', [
         'upstream_status' => $httpStatus,
-        'path'            => $path,
-        'time_ms'         => $elapsed,
-        // UWAGA: nie logujemy $body — może zawierać klucze/tokeny w komunikacie błędu AzuraCast
+        'path' => $path,
+        'time_ms' => $elapsedMs,
     ]);
 
-    jsonError("Serwer radia zwrócił błąd (HTTP {$httpStatus}).", $safeStatus);
+    jsonError(
+        "The AzuraCast server returned an error (HTTP {$httpStatus}).",
+        $safeStatus
+    );
 }
 
-// Log sukcesu w trybie standard
-proxyLog('INFO', 'OK', [
-    'path'    => $path,
-    'status'  => $httpStatus,
-    'time_ms' => $elapsed,
+if ($path === "/station/{$stationId}/listeners") {
+    $body = sanitizeListenersPayload((string) $body);
+}
+
+proxyLog('INFO', 'Request completed successfully', [
+    'path' => $path,
+    'status' => $httpStatus,
+    'time_ms' => $elapsedMs,
 ]);
-
-// ─────────────────────────────────────────────────────────────
-// 12. WYSŁANIE ODPOWIEDZI
-// ─────────────────────────────────────────────────────────────
-
-// NIE przekazujemy X-Upstream-Content-Type — ujawniałoby informacje o upstream
-// Content-Type: application/json; charset=utf-8 ustawiony już w sendSecurityHeaders()
 
 echo $body;

@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AzuraCast — Live Radio Analytics Dashboard</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link href="css/azuracast-stats.css" rel="stylesheet">
+  <script src="js/config.js"></script>
+  <script src="js/chart.umd.js"></script>
+</head>
+
+<body>
+  <!-- Turnstile verification overlay -->
+  <div id="turnstile-overlay" style="position:fixed; top:0; left:0; width:100%; height:100%; background:#0f172a; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center; color:#fff; font-family:sans-serif; text-align:center; padding:24px; box-sizing:border-box;">
+    <div id="turnstile-message" style="margin-bottom:15px; font-size:18px;">Completing security verification...</div>
+    <div id="cf-turnstile"></div>
+  </div>
+
+  <script src="https://challenges.cloudflare.com/turnstile/v0/api.js?onload=onloadTurnstileCallback" async defer></script>
+  <script>
+    function onloadTurnstileCallback() {
+      const siteKey = window.APP_CONFIG?.TURNSTILE_SITE_KEY || "";
+      const message = document.getElementById("turnstile-message");
+
+      if (!siteKey || siteKey === "YOUR_TURNSTILE_SITE_KEY") {
+        if (message) {
+          message.textContent = "Turnstile is not configured. See README.md for setup instructions.";
+        }
+        return;
+      }
+
+      turnstile.render("#cf-turnstile", {
+        sitekey: siteKey,
+        callback: function (token) {
+          fetch("turnstile-verify.php", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({ token: token })
+          })
+            .then(function (res) {
+              return res.json();
+            })
+            .then(function (data) {
+              if (data.success) {
+                const overlay = document.getElementById("turnstile-overlay");
+                if (overlay) overlay.style.display = "none";
+              } else if (message) {
+                message.textContent = data.error || "Security verification failed. Please refresh the page.";
+              }
+            })
+            .catch(function () {
+              if (message) {
+                message.textContent = "Unable to contact the verification service. Please refresh the page.";
+              }
+            });
+        }
+      });
+    }
+  </script>
+
+  <div class="shell">
+
+    <!-- TOPBAR -->
+    <div class="topbar" id="topbar">
+      <div class="brand">
+        <div class="brand-dot" id="stationStatusDot"></div>
+        <div>
+          <div class="brand-name" id="stationNameDisplay">Radio Station</div>
+          <div class="brand-sub" id="stationSubDisplay"><span class="cfg-label">Station URL</span> <a id="stUrl" href="#" target="_blank" rel="noopener noreferrer" style="color:#66b3ff;">-</a></div>
+        </div>
+      </div>
+      <div class="config-bar">
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span id="stPublicBadge" class="badge" style="padding:4px 8px; border-radius:4px; font-size:12px; font-weight:bold;"></span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Frontend / Backend:</span> <span id="stTech" class="cfg-input">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Shortcode:</span> <span id="stShortcode" class="cfg-input" style="font-family:monospace;">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Station ID</span> <span id="stId" class="cfg-input" style="font-family:monospace;">-</span>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Stream URL</span> <a id="stListenUrl" class="cfg-input" href="#" target="_blank" rel="noopener noreferrer" style="color:#66b3ff;">Open MP3 stream</a>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">HLS Stream</span> <a id="stHlsUrl" class="cfg-input" href="#" target="_blank" rel="noopener noreferrer" style="color:#66b3ff;">Open HLS stream</a>
+        </div>
+        <div class="cfg-group" style="flex-direction: column; align-items: flex-start; gap: 4px;">
+          <span class="cfg-label">Playlists:</span>
+          <div class="cfg-group">
+            <a id="stPls" href="#" class="cfg-input" target="_blank" rel="noopener noreferrer" style="font-family:monospace; color:#66b3ff; margin-right:8px;">PLS</a>
+            <a id="stM3u" href="#" class="cfg-input" target="_blank" rel="noopener noreferrer" style="font-family:monospace; color:#66b3ff;">M3U</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATUS BAR -->
+    <div class="status-bar" id="statusBar">
+      <div class="spinner" id="spinner"></div>
+      <span id="statusMsg">Loading data …</span>
+    </div>
+
+    <!-- LIVE STRIP -->
+    <div class="live-strip" id="liveStrip" style="display:none">
+      <div class="live-badge">
+        <div class="live-dot"></div>Live
+      </div>
+      <div>
+        <div class="live-count" id="liveCount">–</div>
+        <div class="live-unit">listeners now</div>
+      </div>
+      <div class="live-meta">
+        <div class="live-meta-item">
+          <div class="live-meta-label">Unique</div>
+          <div class="live-meta-value" id="liveUnique">–</div>
+        </div>
+        <div class="live-meta-item">
+          <div class="live-meta-label">Status</div>
+          <div class="live-meta-value" id="liveStatus">–</div>
+        </div>
+        <div class="live-meta-item">
+          <div class="live-meta-label">Bitrate</div>
+          <div class="live-meta-value" id="liveBitrate">–</div>
+        </div>
+      </div>
+      <div class="live-track" id="liveTrackBlock">
+        <div class="live-track-label">Now playing</div>
+        <div class="live-track-title" id="liveTitle">–</div>
+        <div class="live-track-artist" id="liveArtist"></div>
+      </div>
+      <div class="live-meta-item">
+        <div class="refresh-info" id="refreshInfo">Refreshes every 10s</div>
+        <div class="stats-range-label" id="statsRange" style="font-size: 11px; opacity: 0.8; margin-top: 2px;">Range: -</div>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs" id="mainTabs" style="display:none">
+      <button class="tab active" onclick="switchTab('overview', this)">Overview</button>
+      <button class="tab" onclick="switchTab('tracks', this)">Tracks</button>
+      <button class="tab" onclick="switchTab('listeners', this)">Connections</button>
+    </div>
+
+    <!-- TAB: Overview -->
+    <div class="tab-panel active" id="tab-overview">
+      <div class="kpi-row" id="kpiRow" style="display:none">
+        <div class="kpi-card">
+          <div class="kpi-label">Total (selected days)</div>
+          <div class="kpi-value" id="kpiTotal">–</div>
+          <div class="kpi-sub">from the daily chart</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: var(--live)">
+          <div class="kpi-label">Peak hour</div>
+          <div class="kpi-value" id="kpiPeak">–</div>
+          <div class="kpi-sub" id="kpiPeakHour">–</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: var(--success)">
+          <div class="kpi-label">Best weekday</div>
+          <div class="kpi-value" id="kpiBestDay">–</div>
+          <div class="kpi-sub" id="kpiBestDaySub">–</div>
+        </div>
+        <div class="kpi-card" style="--accent-color: #A78BFA">
+          <div class="kpi-label">Best day</div>
+          <div class="kpi-value" id="kpiBestDate">–</div>
+          <div class="kpi-sub" id="kpiBestDateSub">–</div>
+        </div>
+      </div>
+
+      <div id="overviewCharts" style="display:none">
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Listeners throughout the day (hourly)</div>
+            <div class="chart-sub">Average listener count for each hour</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartHourly" role="img" aria-label="Hourly listener chart"></canvas></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Listeners by weekday</div>
+            <div class="chart-sub">Popularity comparison by weekday</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartDow" role="img" aria-label="Weekday listener chart"></canvas></div>
+          </div>
+        </div>
+        <div class="chart-card" style="margin-bottom:16px">
+          <div class="chart-title">Listeners by day</div>
+          <div class="chart-sub">Daily history for the selected period</div>
+          <div class="chart-wrap" style="height:200px"><canvas id="chartDaily" role="img" aria-label="Daily listener chart"></canvas></div>
+        </div>
+      </div>
+
+      <div class="empty-state" id="overviewEmpty">
+        <div class="empty-state-icon">📻</div>
+        <div class="empty-state-title">No data</div>
+        <div class="empty-state-text">Please wait while data is loaded automatically.</div>
+      </div>
+    </div>
+
+    <!-- TAB: Tracks -->
+    <div class="tab-panel" id="tab-tracks">
+      <div class="bw-grid" id="bwGrid" style="display:none">
+        <div class="bw-card bw-best">
+          <div class="bw-head">
+            <div class="bw-dot"></div>Largest listener increase
+          </div>
+          <div id="bestList"></div>
+        </div>
+        <div class="bw-card bw-worst">
+          <div class="bw-head">
+            <div class="bw-dot"></div>Largest listener decrease
+          </div>
+          <div id="worstList"></div>
+        </div>
+      </div>
+
+      <div class="listeners-card" id="songHistoryCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">
+              <span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>
+              Recently played
+            </div>
+            <div class="listeners-head-sub" id="songHistorySub">/nowplaying → song_history · refreshed every 10s</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="songHistoryTable">
+            <thead>
+              <tr>
+                <th style="width:28px">#</th>
+                <th>Track</th>
+                <th>Artist</th>
+                <th>Album</th>
+                <th>Played at</th>
+                <th>Duration</th>
+              </tr>
+            </thead>
+            <tbody id="songHistoryBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="listeners-card" id="mostPlayedCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">Most played tracks</div>
+            <div class="listeners-head-sub">Tracks ranked by total plays in the selected period.</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="mostPlayedTable">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Track</th>
+                <th>Artist</th>
+                <th>Plays</th>
+                <th style="min-width:100px">Popularity</th>
+              </tr>
+            </thead>
+            <tbody id="mostPlayedBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="empty-state" id="tracksEmpty" style="display:none">
+        <div class="empty-state-icon">🎵</div>
+        <div class="empty-state-title">No track data</div>
+        <div class="empty-state-text">Please wait while data is loaded automatically.</div>
+      </div>
+    </div>
+
+    <!-- TAB: Connections -->
+    <div class="tab-panel" id="tab-listeners">
+      <div id="listenersGeo" style="display:none">
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Listeners by country</div>
+            <div class="chart-sub">Geographic breakdown</div>
+            <div id="geoList"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Playback clients</div>
+            <div class="chart-sub">User-agent / player</div>
+            <div class="chart-wrap" style="height:220px"><canvas id="chartUA" role="img" aria-label="Playback client chart"></canvas></div>
+          </div>
+        </div>
+      </div>
+      <div class="listeners-card" id="listenersTableCard" style="display:none; margin-top:16px">
+        <div class="listeners-head">
+          <div>
+            <div class="listeners-head-title">
+              <span class="live-dot" style="display:inline-block;margin-right:6px;vertical-align:middle"></span>
+              Active listener connections — live
+            </div>
+            <div class="listeners-head-sub" id="listenersCount"></div>
+          </div>
+          <div style="text-align:right; font-size:11px; color:var(--text-muted); line-height:1.6">
+            <div id="listenersLastUpdate">–</div>
+            <div id="listenersNextRefresh" style="color:var(--amber)">Refresh in 30s</div>
+          </div>
+        </div>
+        <div class="listeners-body">
+          <table class="data-table" id="listenersTable">
+            <thead>
+              <tr>
+                <th style="width:28px">#</th>
+                <th>Location</th>
+                <th>Player</th>
+                <th>Stream</th>
+                <th>Connection time</th>
+                <th>Od</th>
+              </tr>
+            </thead>
+            <tbody id="listenersBody"></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="empty-state" id="listenersEmpty" style="display:none">
+        <div class="empty-state-icon">👥</div>
+        <div class="empty-state-title">No connection data</div>
+        <div class="empty-state-text">Please wait while data is loaded automatically.</div>
+      </div>
+    </div>
+
+    <footer>
+      AzuraCast Analytics Dashboard <span id="app-version"></span>· Created by <a href="https://www.digital-gospel.com" target="_blank" style="color:var(--amber)">Digital Gospel</a> · Open source · MIT License
+    </footer>
+  </div>
+
+  <script>
+    document.getElementById('app-version').textContent = window.APP_CONFIG?.APP_VERSION ? `v${window.APP_CONFIG.APP_VERSION} ` : '';
+  </script>
+
+  <script src="js/azuracast-stats.js"></script>
+</body>
+
+</html>

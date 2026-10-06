@@ -1,0 +1,19 @@
+# Runtime configuration and secrets
+azuracast-api-proxy.env
+*.env
+!.env.example
+
+# Runtime logs
+*.log
+logs/
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+#
+archive/
+dist/
+pl/
